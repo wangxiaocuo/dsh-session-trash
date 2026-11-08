@@ -2,6 +2,8 @@
 
 [简体中文](./README.md) | English
 
+Repository: [GitHub](https://github.com/wangxiaocuo/dsh-session-trash)
+
 English translation of [README.md](./README.md).
 
 A session trash for DeepSeek Harness. Move cold sessions out of the sidebar without deleting their logs, restore them within the retention window, or delete the logs permanently. Built for DSH 0.2.2-rc.1 on Desktop and Web. Host and Client ship in one package, with no build step.
@@ -20,18 +22,23 @@ Status: feature complete and covered by the regression suite. macOS has been ver
 
 ## Installation
 
-From the directory that contains this package:
+Clone the repository:
+
+```bash
+git clone https://github.com/wangxiaocuo/dsh-session-trash.git
+cd dsh-session-trash
+```
+
+A bundle installed as a directory link uses its own `node_modules`, so run `pnpm install` in the package directory before installing the bundle. Then install the current directory with `plugin_manager` in DSH:
 
 ```text
 plugin_manager install_bundle  target=<absolute path to this directory>
 ```
 
-A bundle installed as a directory link uses its own `node_modules`, so run `pnpm install` in the package directory before installing the bundle.
-
 For local development, link the package into a profile:
 
 ```bash
-cd ~/.dsh/profiles/desktop
+cd "${DSH_HOME:-$HOME/.dsh}/profiles/desktop"
 pnpm add link:/absolute/path/to/dsh-session-trash
 ```
 
@@ -147,6 +154,7 @@ DSH_HOME=$(mktemp -d) ELECTRON_RUN_AS_NODE=1 \
 Project layout:
 
 ```text
+README.md / README.en.md   Chinese / English docs
 index.js              Host entry, Config, and service wiring
 client.js             Client UI, sidebar menu, and Toast
 lib/                  index, lock, moves, eligibility, cleanup, HTTP, and state

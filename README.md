@@ -2,6 +2,8 @@
 
 简体中文 | [English](./README.en.md)
 
+仓库：[GitHub](https://github.com/wangxiaocuo/dsh-session-trash)
+
 DeepSeek Harness 的会话回收站插件。冷会话可以从侧边栏移出，日志保留在本地；在保留期内可以恢复，到期后自动删除日志。面向 DSH 0.2.2-rc.1 的 Desktop 和 Web，Host 和 Client 在同一个包里，不需要构建步骤。
 
 当前状态：功能已实现并通过回归测试。macOS 已完成真实 DSH Host 验证；Windows 和 Linux 的路径、锁、重试规则有单测覆盖，尚未在真实主机上验证。
@@ -18,18 +20,23 @@ DeepSeek Harness 的会话回收站插件。冷会话可以从侧边栏移出，
 
 ## 安装
 
-从包含本包的目录执行：
+从 GitHub 克隆仓库：
+
+```bash
+git clone https://github.com/wangxiaocuo/dsh-session-trash.git
+cd dsh-session-trash
+```
+
+目录链接形式的 bundle 会使用自己的 `node_modules`，安装前先在包目录运行 `pnpm install`。然后在 DSH 的 `plugin_manager` 中安装当前目录：
 
 ```text
 plugin_manager install_bundle  target=<absolute path to this directory>
 ```
 
-目录链接形式的 bundle 会使用自己的 `node_modules`，安装前先在包目录运行 `pnpm install`。
-
 本地开发也可以把包链接到 profile：
 
 ```bash
-cd ~/.dsh/profiles/desktop
+cd "${DSH_HOME:-$HOME/.dsh}/profiles/desktop"
 pnpm add link:/absolute/path/to/dsh-session-trash
 ```
 
@@ -145,6 +152,7 @@ DSH_HOME=$(mktemp -d) ELECTRON_RUN_AS_NODE=1 \
 项目结构：
 
 ```text
+README.md / README.en.md   中文 / English 文档
 index.js              Host 入口、Config 和服务装配
 client.js             Client 界面、侧边栏菜单和 Toast
 lib/                  索引、锁、移动、资格判断、清理、HTTP 和状态投影
