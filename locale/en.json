@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Session trash",
+    "description": "Move cold sessions into a recoverable trash and restore or delete them within the retention window."
+  }
+}

@@ -1,0 +1,278 @@
+import fs from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import { TrashStore } from '../lib/store.js'
+import { createEligibility } from '../lib/eligibility.js'
+import { createTrashService } from '../lib/trash-service.js'
+import { createStateService } from '../lib/state.js'
+
+/**
+ * @param {string} [prefix] temp-directory prefix.
+ * @returns {Promise<string>} a fresh empty directory.
+ */
+export async function createTempDir(prefix = 'dsh-session-trash-') {
+  return fs.mkdtemp(path.join(os.tmpdir(), prefix))
+}
+
+/**
+ * @returns {{ level: string, args: unknown[] }[]} logger records, plus no-op methods.
+ */
+export function createLogger() {
+  const lines = []
+  const push = (level) => (...args) => {
+    lines.push({ level, args })
+  }
+  return { lines, info: push('info'), warn: push('warn'), error: push('error'), debug: push('debug') }
+}
+
+/**
+ * @param {string} cwd project directory.
+ * @returns {string} a JSONL-style project directory name.
+ */
+export function projectName(cwd) {
+  const readable = cwd.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+/, '') || 'root'
+  return `--${readable.slice(0, 251)}--`
+}
+
+/**
+ * In-memory persistence harness backed by real directories so the trash
+ * service moves real files and `stat` really reflects visibility.
+ *
+ * @param {string} sessionsRoot root that holds per-project session directories.
+ * @returns {object} the fake service plus test helpers.
+ */
+export function createFakePersistence(sessionsRoot) {
+  const records = new Map()
+  const snapshot = async (record) => {
+    let stats
+    try {
+      stats = await fs.stat(record.logPath)
+    } catch {
+      return undefined
+    }
+    if (!stats.isFile()) return undefined
+    return {
+      header: record.header,
+      formatStatus: 'current',
+      revision: 'rev',
+      sizeBytes: stats.size,
+      location: { kind: 'jsonl', path: record.logPath },
+    }
+  }
+  const persistence = {
+    records,
+    sessionsRoot,
+    /**
+     * @param {string} id session id.
+     * @returns {Promise<object | undefined>} the current snapshot.
+     */
+    async stat(id) {
+      const record = records.get(id)
+      if (record === undefined) return undefined
+      return snapshot(record)
+    },
+    /**
+     * @returns {Promise<object[]>} every visible snapshot.
+     */
+    async list() {
+      const items = []
+      for (const record of records.values()) {
+        const current = await snapshot(record)
+        if (current !== undefined) items.push(current)
+      }
+      return items
+    },
+    /**
+     * @param {{ id: string, cwd?: string, origin?: 'subagent', parentSession?: string, createdAt?: number, content?: string }} input session to materialize.
+     * @returns {Promise<object>} the record.
+     */
+    async add({ id, cwd, origin, parentSession, createdAt = Date.now(), content = '{"type":"session/start"}\n' }) {
+      const projectDir = path.join(sessionsRoot, cwd === undefined ? '_no-cwd' : projectName(cwd))
+      const dir = path.join(projectDir, id)
+      const logPath = path.join(dir, 'session.v4.jsonl')
+      await fs.mkdir(dir, { recursive: true })
+      await fs.writeFile(logPath, content)
+      await fs.writeFile(path.join(dir, 'session.lock'), '')
+      const header = {
+        version: 4,
+        id,
+        createdAt,
+        isSeeded: false,
+        ...(cwd === undefined ? {} : { cwd }),
+        ...(origin === undefined ? {} : { origin }),
+        ...(parentSession === undefined ? {} : { parentSession }),
+      }
+      const record = { header, dir, logPath }
+      records.set(id, record)
+      return record
+    },
+  }
+  return persistence
+}
+
+/**
+ * Fake Workspace registry recording attach/detach/reorder calls.
+ *
+ * @returns {object} the registry.
+ */
+export function createFakeWorkspaceRegistry() {
+  const items = []
+  const registry = {
+    items,
+    /**
+     * @param {{ id: string, path: string, title?: string, sessionIds?: string[] }} input workspace.
+     * @returns {object} the fake workspace.
+     */
+    add({ id, path: workspacePath, title = path.basename(workspacePath), sessionIds = [] }) {
+      const workspace = {
+        id,
+        path: workspacePath,
+        title,
+        sessionIds: [...sessionIds],
+        calls: [],
+        async detachSession(sessionId) {
+          this.calls.push(['detach', sessionId])
+          this.sessionIds = this.sessionIds.filter((value) => value !== sessionId)
+        },
+        async attachSession(sessionId) {
+          this.calls.push(['attach', sessionId])
+          if (!this.sessionIds.includes(sessionId)) this.sessionIds = [sessionId, ...this.sessionIds]
+        },
+        async insertSessionBefore(sessionId, beforeSessionId) {
+          this.calls.push(['insertBefore', sessionId, beforeSessionId])
+          const without = this.sessionIds.filter((value) => value !== sessionId)
+          const at = beforeSessionId === undefined ? without.length : without.indexOf(beforeSessionId)
+          this.sessionIds = [...without.slice(0, at), sessionId, ...without.slice(at)]
+        },
+      }
+      items.push(workspace)
+      return workspace
+    },
+    /**
+     * @param {string} id workspace id.
+     * @returns {object | undefined} the matching workspace.
+     */
+    get(id) {
+      return items.find((item) => item.id === id)
+    },
+    /**
+     * @returns {object[]} the registry order.
+     */
+    list() {
+      return items
+    },
+  }
+  return registry
+}
+
+/**
+ * Build a coherent Phase 2/3 harness: real trash store and directories, fake
+ * persistence, workspace, and native-open services.
+ *
+ * @param {{ config?: object, titles?: Map<string, string>, canOpenPath?: boolean, revealError?: Error, sessionController?: boolean }} [options] overrides.
+ * @returns {Promise<object>} the harness handle.
+ */
+export async function createHarness(options = {}) {
+  const root = await createTempDir()
+  const sessionsRoot = path.join(root, 'sessions')
+  const trashRoot = path.join(root, '.session-trash')
+  await fs.mkdir(sessionsRoot, { recursive: true })
+  const persistence = createFakePersistence(sessionsRoot)
+  const workspaces = createFakeWorkspaceRegistry()
+  const titles = options.titles ?? new Map()
+  const logger = createLogger()
+  const config = { retentionDays: 30, sweepIntervalHours: 6, enableAutoCleanup: true, ...(options.config ?? {}) }
+  const emissions = []
+  const liveSessions = new Map()
+  const liveAgents = new Map()
+  let activity = () => Promise.resolve([])
+  const sessionQuery = {
+    async readTitle(sessionId) {
+      return titles.get(sessionId)
+    },
+  }
+  const revealed = []
+  const sessionController = {
+    canOpenWorkspacePath() {
+      return options.canOpenPath ?? true
+    },
+    async openWorkspacePath(request, signal) {
+      signal?.throwIfAborted?.()
+      if (options.revealError !== undefined) throw options.revealError
+      revealed.push(request)
+      return { opened: true }
+    },
+  }
+  const services = new Map([
+    ['sessionQuery', sessionQuery],
+    ['workspaceRegistry', workspaces],
+    ...(options.sessionController === false ? [] : [['sessionController', sessionController]]),
+  ])
+  const ctx = {
+    sessionPersistence: persistence,
+    sessions: { get: (id) => liveSessions.get(id) },
+    agents: { get: (id) => liveAgents.get(id) },
+    get: (name) => services.get(name),
+    async waterfall() {
+      return activity()
+    },
+    emit(event, ...args) {
+      emissions.push({ event, args })
+    },
+  }
+  const store = new TrashStore({ root: trashRoot, logger })
+  await store.init()
+  const eligibility = createEligibility({ ctx, store, logger })
+  const stateService = createStateService({
+    store,
+    config,
+    trashRootDisplay: '$DSH_HOME/.session-trash',
+    ...(options.cleanup === undefined ? {} : { cleanup: options.cleanup }),
+  })
+  const service = createTrashService({
+    ctx,
+    store,
+    eligibility,
+    config,
+    logger,
+    paths: { root: trashRoot, display: '$DSH_HOME/.session-trash' },
+  })
+  return {
+    root,
+    sessionsRoot,
+    trashRoot,
+    persistence,
+    workspaces,
+    titles,
+    logger,
+    config,
+    emissions,
+    liveSessions,
+    liveAgents,
+    revealed,
+    sessionController,
+    setActivity(fn) {
+      activity = fn
+    },
+    ctx,
+    store,
+    eligibility,
+    stateService,
+    service,
+    /**
+     * @param {Parameters<typeof persistence.add>[0]} input session.
+     * @returns {Promise<object>} the persistence record.
+     */
+    async addSession(input) {
+      const record = await persistence.add(input)
+      if (input.title !== undefined) titles.set(input.id, input.title)
+      return record
+    },
+    /**
+     * @returns {Promise<void>} cleanup.
+     */
+    async dispose() {
+      await fs.rm(root, { recursive: true, force: true })
+    },
+  }
+}

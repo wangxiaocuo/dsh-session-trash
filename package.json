@@ -1,0 +1,45 @@
+{
+  "name": "dsh-session-trash",
+  "version": "0.5.0",
+  "private": true,
+  "type": "module",
+  "description": "Move cold sessions into a recoverable trash, then restore or permanently delete them before the retention window expires.",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "lib/*.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "test:e2e": "node test/e2e-web.mjs",
+    "test:smoke": "DSH_HOME=$(mktemp -d) ELECTRON_RUN_AS_NODE=1 \"/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness\" test/smoke-host.mjs"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-home-paths": "0.2.2-rc.1",
+    "@deepseek-ai/schemastery": "3.19.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-context-menu",
+        "@deepseek-ai/dsh-client-ui-settings-general",
+        "@deepseek-ai/dsh-client-ui-workspace"
+      ]
+    }
+  }
+}

@@ -1,0 +1,1007 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
+
+/**
+ * @param {readonly unknown[] | undefined} left first dependency list.
+ * @param {readonly unknown[] | undefined} right second dependency list.
+ * @returns {boolean} whether both lists are shallow-equal.
+ */
+function sameDeps(left, right) {
+  if (left === undefined || right === undefined) return left === right
+  if (left.length !== right.length) return false
+  return left.every((value, index) => Object.is(value, right[index]))
+}
+
+/**
+ * Build the smallest hook-capable React substitute that can execute the real
+ * settings section and settle its async load effect.
+ *
+ * @returns {object} the React surface plus its render driver.
+ */
+function createMiniReact() {
+  /** @type {unknown[]} */
+  let hooks = []
+  let hookIndex = 0
+  let effectQueue = []
+  let dirty = false
+
+  /**
+   * @returns {void}
+   */
+  function schedule() {
+    dirty = true
+  }
+
+  const React = {
+    /**
+     * @param {string | Function} type element type.
+     * @param {object | null} props element props.
+     * @param {...unknown} children child nodes.
+     * @returns {object} a plain element tree.
+     */
+    createElement(type, props, ...children) {
+      return { type, props: props ?? {}, children: children.flat(Infinity) }
+    },
+    /**
+     * @param {unknown} initial initial value or initializer.
+     * @returns {[unknown, (next: unknown) => void]} state and setter.
+     */
+    useState(initial) {
+      const index = hookIndex
+      hookIndex += 1
+      if (!(index in hooks)) hooks[index] = typeof initial === 'function' ? initial() : initial
+      const set = (next) => {
+        hooks[index] = typeof next === 'function' ? next(hooks[index]) : next
+        schedule()
+      }
+      return [hooks[index], set]
+    },
+    /**
+     * @param {unknown} initial initial reference value.
+     * @returns {{ current: unknown }} the stable ref.
+     */
+    useRef(initial) {
+      const index = hookIndex
+      hookIndex += 1
+      if (!(index in hooks)) hooks[index] = { current: initial }
+      return hooks[index]
+    },
+    /**
+     * @param {Function} callback function to memoize.
+     * @param {readonly unknown[] | undefined} deps dependency list.
+     * @returns {Function} the stable callback.
+     */
+    useCallback(callback, deps) {
+      const index = hookIndex
+      hookIndex += 1
+      const previous = hooks[index]
+      if (previous !== undefined && sameDeps(previous.deps, deps)) return previous.callback
+      hooks[index] = { callback, deps }
+      return callback
+    },
+    /**
+     * @param {Function} effect effect body.
+     * @param {readonly unknown[] | undefined} deps dependency list.
+     * @returns {void}
+     */
+    useEffect(effect, deps) {
+      const index = hookIndex
+      hookIndex += 1
+      const previous = hooks[index]
+      effectQueue.push({ index, effect, deps, changed: previous === undefined || !sameDeps(previous.deps, deps) })
+    },
+    /**
+     * @param {Function} _subscribe ignored subscriber.
+     * @param {Function} getSnapshot current snapshot reader.
+     * @returns {unknown} the current snapshot.
+     */
+    useSyncExternalStore(_subscribe, getSnapshot) {
+      return getSnapshot()
+    },
+  }
+
+  /**
+   * @param {Function} Component component whose hooks own this renderer.
+   * @returns {object} the rendered element tree.
+   */
+  function renderOnce(Component) {
+    hookIndex = 0
+    effectQueue = []
+    const tree = Component({})
+    for (const record of effectQueue) {
+      if (!record.changed) continue
+      const previous = hooks[record.index]
+      if (previous !== undefined && typeof previous.cleanup === 'function') previous.cleanup()
+      const cleanup = record.effect()
+      hooks[record.index] = { deps: record.deps, cleanup: typeof cleanup === 'function' ? cleanup : null }
+    }
+    return tree
+  }
+
+  return {
+    React,
+    /**
+     * Render until no setter fired during the settle window.
+     *
+     * @param {Function} Component component to render.
+     * @param {number} [steps] maximum render passes.
+     * @returns {Promise<object>} the settled element tree.
+     */
+    async settle(Component, steps = 20) {
+      let tree = null
+      for (let step = 0; step < steps; step += 1) {
+        dirty = false
+        tree = renderOnce(Component)
+        await new Promise((resolve) => setTimeout(resolve, 5))
+        if (!dirty) return tree
+      }
+      return tree
+    },
+  }
+}
+
+/**
+ * @param {unknown} node element tree node.
+ * @param {(element: object) => void} visit visitor.
+ * @returns {void}
+ */
+function walk(node, visit) {
+  if (Array.isArray(node)) {
+    for (const child of node) walk(child, visit)
+    return
+  }
+  if (node === null || typeof node !== 'object' || node.type === undefined) return
+  visit(node)
+  for (const child of node.children) walk(child, visit)
+}
+
+/**
+ * @param {object} tree rendered tree.
+ * @returns {string[]} every string child in document order.
+ */
+function textOf(tree) {
+  const text = []
+  walk(tree, (element) => {
+    for (const child of element.children) if (typeof child === 'string') text.push(child)
+  })
+  return text
+}
+
+/**
+ * @param {object} tree rendered tree.
+ * @param {string} label exact button text.
+ * @returns {object | undefined} the matching button element.
+ */
+function buttonByText(tree, label) {
+  let found
+  walk(tree, (element) => {
+    if (found !== undefined) return
+    if (element.type !== 'button') return
+    if (element.children.includes(label)) found = element
+  })
+  return found
+}
+
+/**
+ * @param {object} tree rendered tree.
+ * @param {string} kind dialog kind carried in props.
+ * @returns {object | undefined} the dialog element.
+ */
+function dialogOfKind(tree, kind) {
+  let found
+  walk(tree, (element) => {
+    if (found !== undefined) return
+    if (typeof element.type === 'function' && element.props.kind === kind && element.props.onConfirm !== undefined) {
+      found = element
+    }
+  })
+  return found
+}
+
+/**
+ * @param {object} tree rendered tree.
+ * @returns {object[]} every rendered action-menu element.
+ */
+function actionMenus(tree) {
+  const found = []
+  walk(tree, (element) => {
+    if (typeof element.type === 'function' && Array.isArray(element.props.items)) found.push(element)
+  })
+  return found
+}
+
+/**
+ * @param {object} tree rendered tree.
+ * @param {string} className one class token.
+ * @returns {object[]} every element carrying that class, in document order.
+ */
+function elementsByClass(tree, className) {
+  const found = []
+  walk(tree, (element) => {
+    if (typeof element.props.className === 'string' && element.props.className.split(' ').includes(className)) {
+      found.push(element)
+    }
+  })
+  return found
+}
+
+/**
+ * @param {object} tree rendered tree.
+ * @param {string} className one class token.
+ * @returns {object | undefined} the first element carrying that class.
+ */
+function elementByClass(tree, className) {
+  return elementsByClass(tree, className)[0]
+}
+
+/**
+ * @param {object} tree rendered tree.
+ * @param {string} label accessible name carried in `aria-label`.
+ * @returns {object | undefined} the matching input.
+ */
+function inputByLabel(tree, label) {
+  let found
+  walk(tree, (element) => {
+    if (found !== undefined) return
+    if (element.type === 'input' && element.props['aria-label'] === label) found = element
+  })
+  return found
+}
+
+/**
+ * @param {object} tree rendered tree.
+ * @param {string} value radio input value.
+ * @returns {object | undefined} the matching radio input.
+ */
+function radioByValue(tree, value) {
+  let found
+  walk(tree, (element) => {
+    if (found !== undefined) return
+    if (element.type === 'input' && element.props.type === 'radio' && element.props.value === value) found = element
+  })
+  return found
+}
+
+/**
+ * @param {object} tree rendered tree.
+ * @returns {string[]} visible row titles in document order.
+ */
+function rowTitles(tree) {
+  return elementsByClass(tree, 'dsh-trash__row').map((row) => {
+    const title = elementByClass(row, 'dsh-trash__rowTitle')
+    return title === undefined ? '' : title.children.join('')
+  })
+}
+
+const STATE_ROUTE = '/plugins/dsh-session-trash/api/state'
+const RESTORE_ROUTE = '/plugins/dsh-session-trash/api/restore'
+const PURGE_ROUTE = '/plugins/dsh-session-trash/api/purge'
+const REBUILD_ROUTE = '/plugins/dsh-session-trash/api/rebuild'
+const CLEANUP_ROUTE = '/plugins/dsh-session-trash/api/cleanup'
+const REVEAL_ROUTE = '/plugins/dsh-session-trash/api/reveal'
+const FORGET_ROUTE = '/plugins/dsh-session-trash/api/forget'
+
+const DAY = 86_400_000
+
+/**
+ * @param {object} [overrides] entry overrides.
+ * @returns {object} one complete wire entry.
+ */
+function makeEntry(overrides = {}) {
+  const now = Date.now()
+  return {
+    sessionId: 'session-x',
+    title: 'X',
+    trashedAt: now - 1000,
+    expiresAt: now + 20 * DAY,
+    originalCwd: '/tmp/x',
+    workspaceExistsAtDeletion: true,
+    workspaceNowExists: true,
+    sizeBytes: 1024,
+    fileCount: 1,
+    formatStatus: 'current',
+    state: 'trashed',
+    canRestore: true,
+    canPurge: true,
+    canForget: false,
+    requiresOrphanRestore: false,
+    lastError: null,
+    ...overrides,
+  }
+}
+
+/**
+ * @param {object[]} entries wire entries.
+ * @returns {object} a complete `/state` payload.
+ */
+function statePayloadWith(entries) {
+  const payload = statePayload()
+  payload.entries = entries
+  payload.stats = {
+    count: entries.length,
+    totalBytes: entries.reduce((sum, entry) => sum + (entry.sizeBytes ?? 0), 0),
+    nextSweepAt: Date.now() + 3600_000,
+  }
+  return payload
+}
+
+/**
+ * @param {object} [overrides] entry overrides.
+ * @returns {object} one full `/state` payload.
+ */
+function statePayload(overrides = {}) {
+  const now = Date.now()
+  return {
+    version: 1,
+    config: { retentionDays: 30, sweepIntervalHours: 6, enableAutoCleanup: true },
+    trashRootDisplay: '$DSH_HOME/.session-trash',
+    index: { status: 'ok', updatedAt: now, error: null, unindexed: 0 },
+    entries: [
+      {
+        sessionId: 'session-alpha',
+        title: 'Alpha',
+        trashedAt: now - 1000,
+        expiresAt: now + 29 * DAY,
+        originalCwd: '/tmp/demo',
+        workspaceExistsAtDeletion: true,
+        workspaceNowExists: true,
+        sizeBytes: 2048,
+        fileCount: 2,
+        formatStatus: 'current',
+        state: 'trashed',
+        canRestore: true,
+        canPurge: true,
+        canForget: false,
+        requiresOrphanRestore: false,
+        lastError: null,
+        ...overrides,
+      },
+    ],
+    stats: { count: 1, totalBytes: 2048, nextSweepAt: now + 3600_000 },
+  }
+}
+
+/**
+ * Load the module behind a fake loader and a mini React runtime.
+ *
+ * @returns {Promise<{ factory: Function, mini: object }>} the client factory and renderer.
+ */
+async function loadModule() {
+  const clientFactory = await (async () => {
+    const loaded = []
+    globalThis.window = {
+      __ModuleLoader__: {
+        load(module) {
+          loaded.push(module)
+        },
+      },
+      location: { origin: 'http://127.0.0.1:3080' },
+      addEventListener() {},
+      removeEventListener() {},
+    }
+    globalThis.document = {
+      visibilityState: 'visible',
+      addEventListener() {},
+      removeEventListener() {},
+      activeElement: null,
+      body: { appendChild() {}, removeChild() {} },
+      execCommand() {
+        return true
+      },
+    }
+    await import(`${pathToFileURL(path.resolve('client.js')).href}?render=${Math.random()}`)
+    assert.equal(loaded.length, 1)
+    return loaded[0].factory
+  })()
+  const mini = createMiniReact()
+  return { factory: clientFactory, mini }
+}
+
+/**
+ * @param {Function} factory client module factory.
+ * @param {object} mini mini React runtime.
+ * @param {object} payload `/state` answer.
+ * @param {Record<string, object | Function>} [extra] additional endpoint answers.
+ * @returns {{ ctx: object, calls: object[], render: Function, toasts: object[] }} the client harness.
+ */
+function createClient(factory, mini, payload, extra = {}) {
+  const dictionaries = {}
+  const slots = []
+  const toasts = []
+  const calls = []
+  globalThis.fetch = async (url, options = {}) => {
+    const pathname = new URL(String(url)).pathname
+    calls.push({ pathname, options })
+    let answer
+    if (pathname === STATE_ROUTE) answer = typeof payload === 'function' ? payload(calls.length) : { status: 200, body: payload }
+    else if (extra[pathname] !== undefined) answer = typeof extra[pathname] === 'function' ? extra[pathname](options) : extra[pathname]
+    else answer = { status: 200, body: { ok: true } }
+    return {
+      ok: (answer.status ?? 200) < 400,
+      status: answer.status ?? 200,
+      json: async () => answer.body,
+    }
+  }
+  const locale = {
+    register(namespace, dicts) {
+      dictionaries[namespace] = dicts
+      return () => {}
+    },
+    bind(namespace) {
+      return (key) => {
+        const dict = dictionaries[namespace]?.zh ?? {}
+        return dict[key] ?? key
+      }
+    },
+    getSnapshot() {
+      return { active: 'zh', revision: 1, locales: [] }
+    },
+    subscribe() {
+      return () => {}
+    },
+  }
+  const ctx = {
+    effect(callback) {
+      return callback()
+    },
+    get() {
+      return undefined
+    },
+    locale,
+    slots: {
+      inject(_name, factoryCallback) {
+        factoryCallback()
+        return () => {}
+      },
+      register(definition, component) {
+        slots.push({ definition, component })
+        return () => {}
+      },
+    },
+    contextMenus: {
+      register() {
+        return () => {}
+      },
+      notify(text, success, action) {
+        toasts.push({ text, success, action })
+      },
+    },
+  }
+  const module = factory((name) => {
+    if (name === 'react') return mini.React
+    throw new Error(`unexpected module ${name}`)
+  })
+  module.apply(ctx)
+  return { ctx, calls, slots, toasts }
+}
+
+test('the trash page renders rows, badges, and row actions from /state', async () => {
+  const { factory, mini } = await loadModule()
+  const client = createClient(factory, mini, statePayload())
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+  const text = textOf(tree)
+  assert.ok(text.includes('Alpha'))
+  assert.ok(text.includes('session-alpha'))
+  assert.ok(text.includes('/tmp/demo'))
+  assert.ok(text.includes('恢复'))
+  assert.ok(text.includes('回收站目录：$DSH_HOME/.session-trash'))
+  assert.ok(text.includes('即将到期') || text.some((value) => value.includes('天后')))
+
+  const menus = actionMenus(tree)
+  assert.equal(menus.length, 1)
+  const labels = menus[0].props.items.map((item) => item.label)
+  assert.deepEqual(labels, ['恢复为孤儿会话', '在 Finder 中显示', '复制 Session ID', '永久删除'])
+  assert.equal(menus[0].props.items.at(-1).danger, true)
+  assert.equal(menus[0].props.label, '「Alpha」的更多操作')
+})
+
+test('a missing row offers only the index-removal action', async () => {
+  const { factory, mini } = await loadModule()
+  const client = createClient(
+    factory,
+    mini,
+    statePayload({
+      state: 'missing',
+      canRestore: false,
+      canPurge: false,
+      canForget: true,
+      expiresAt: null,
+      lastError: 'The trash copy is missing.',
+    }),
+  )
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+  const text = textOf(tree)
+  assert.ok(text.includes('文件缺失'))
+  assert.ok(text.includes('上次错误：The trash copy is missing.'))
+  assert.equal(buttonByText(tree, '恢复'), undefined)
+  const labels = actionMenus(tree)[0].props.items.map((item) => item.label)
+  assert.deepEqual(labels, ['在 Finder 中显示', '复制 Session ID', '从索引移除'])
+})
+
+test('restoring a trashed row posts normal mode and shows a success Toast', async () => {
+  const { factory, mini } = await loadModule()
+  const client = createClient(factory, mini, statePayload(), {
+    [RESTORE_ROUTE]: {
+      body: { ok: true, session: { sessionId: 'session-alpha', title: 'Alpha', orphan: false, workspaceReattached: true } },
+    },
+  })
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+  const restore = buttonByText(tree, '恢复')
+  assert.ok(restore !== undefined)
+  restore.props.onClick()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  const call = client.calls.find((entry) => entry.pathname === RESTORE_ROUTE)
+  assert.ok(call !== undefined)
+  assert.equal(call.options.method, 'POST')
+  assert.deepEqual(JSON.parse(call.options.body), { sessionId: 'session-alpha', mode: 'normal' })
+  assert.equal(client.toasts.at(-1).text, '已恢复「Alpha」')
+  assert.equal(client.toasts.at(-1).success, true)
+})
+
+test('a missing workspace opens the orphan dialog before restoring', async () => {
+  const { factory, mini } = await loadModule()
+  const client = createClient(
+    factory,
+    mini,
+    statePayload({ workspaceNowExists: false, requiresOrphanRestore: true }),
+    {
+      [RESTORE_ROUTE]: {
+        body: { ok: true, session: { sessionId: 'session-alpha', title: 'Alpha', orphan: true, workspaceReattached: false } },
+      },
+    },
+  )
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+  assert.ok(textOf(tree).includes('工作区缺失'))
+  const reveal = actionMenus(tree)[0].props.items.find((item) => item.key === 'reveal')
+  assert.equal(reveal.disabled, true)
+  assert.equal(reveal.ariaLabel, '在 Finder 中显示 — 原工作区已不存在')
+  buttonByText(tree, '恢复').props.onClick()
+  const afterClick = await mini.settle(section.component)
+  const dialog = dialogOfKind(afterClick, 'orphan')
+  assert.ok(dialog !== undefined)
+  assert.ok(dialog.props.entry.originalCwd === '/tmp/demo')
+  assert.equal(client.calls.filter((entry) => entry.pathname === RESTORE_ROUTE).length, 0)
+
+  dialog.props.onConfirm()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  const call = client.calls.find((entry) => entry.pathname === RESTORE_ROUTE)
+  assert.deepEqual(JSON.parse(call.options.body), { sessionId: 'session-alpha', mode: 'orphan' })
+  assert.equal(client.toasts.at(-1).text, '已恢复为孤儿会话「Alpha」')
+})
+
+test('purging from the row menu asks for confirmation before deleting', async () => {
+  const { factory, mini } = await loadModule()
+  const client = createClient(factory, mini, statePayload(), {
+    [PURGE_ROUTE]: { body: { ok: true, sessionId: 'session-alpha' } },
+  })
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+  const menus = actionMenus(tree)
+  const purge = menus[0].props.items.find((item) => item.key === 'purge')
+  purge.onSelect()
+  const afterSelect = await mini.settle(section.component)
+  const dialog = dialogOfKind(afterSelect, 'purge')
+  assert.ok(dialog !== undefined)
+  assert.equal(client.calls.filter((entry) => entry.pathname === PURGE_ROUTE).length, 0)
+  dialog.props.onConfirm()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  const call = client.calls.find((entry) => entry.pathname === PURGE_ROUTE)
+  assert.deepEqual(JSON.parse(call.options.body), { sessionId: 'session-alpha' })
+  assert.equal(client.toasts.at(-1).text, '已永久删除「Alpha」')
+})
+
+test('a corrupt index shows the recovery banner and rebuilds on demand', async () => {
+  const { factory, mini } = await loadModule()
+  const payload = statePayload()
+  payload.index = { status: 'corrupt', updatedAt: 1, error: 'broken', unindexed: 0 }
+  payload.entries = []
+  payload.stats = { count: 0, totalBytes: 0, nextSweepAt: null }
+  const client = createClient(factory, mini, payload, {
+    [REBUILD_ROUTE]: { body: { ok: true, entries: 2, unindexed: 1 } },
+  })
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+  assert.ok(textOf(tree).includes('回收站索引损坏，已进入保护模式。现有会话不会被自动修改。'))
+  const rebuild = buttonByText(tree, '尝试重建索引')
+  assert.ok(rebuild !== undefined)
+  rebuild.props.onClick()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(client.calls.filter((entry) => entry.pathname === REBUILD_ROUTE).length, 1)
+  assert.equal(client.toasts.at(-1).text, '索引已重建，共 2 个条目；1 个未索引对象已保留')
+})
+
+test('the empty trash renders its guidance copy', async () => {
+  const { factory, mini } = await loadModule()
+  const payload = statePayload()
+  payload.entries = []
+  payload.stats = { count: 0, totalBytes: 0, nextSweepAt: null }
+  const client = createClient(factory, mini, payload)
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+  const text = textOf(tree)
+  assert.ok(text.includes('回收站为空'))
+  assert.ok(text.includes('在侧边栏右键会话，选择「移入回收站」。'))
+  assert.equal(inputByLabel(tree, '搜索回收站'), undefined)
+})
+
+test('a first-load failure shows only the error banner and retries into the list', async () => {
+  const { factory, mini } = await loadModule()
+  const client = createClient(factory, mini, (callCount) =>
+    callCount === 1
+      ? { status: 401, body: { ok: false, error: { code: 'FORBIDDEN' } } }
+      : { status: 200, body: statePayload() },
+  )
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  let tree = await mini.settle(section.component)
+  let text = textOf(tree)
+  assert.ok(text.includes('连接已失效，请刷新页面。'))
+  assert.ok(!text.includes('回收站为空'))
+  assert.equal(inputByLabel(tree, '搜索回收站'), undefined)
+  const retry = buttonByText(tree, '重试')
+  assert.ok(retry !== undefined)
+
+  retry.props.onClick()
+  tree = await mini.settle(section.component)
+  text = textOf(tree)
+  assert.deepEqual(rowTitles(tree), ['Alpha'])
+  assert.ok(inputByLabel(tree, '搜索回收站') !== undefined)
+  assert.ok(!text.includes('连接已失效，请刷新页面。'))
+})
+
+test('search narrows the list by title, Session ID, or workspace', async () => {
+  const { factory, mini } = await loadModule()
+  const now = Date.now()
+  const payload = statePayloadWith([
+    makeEntry({ sessionId: 'session-alpha', title: 'Refactor login', originalCwd: '/work/login', trashedAt: now - 1000 }),
+    makeEntry({ sessionId: 'session-beta', title: 'Fix navbar', originalCwd: '/work/site', trashedAt: now - 2000 }),
+    makeEntry({ sessionId: 'session-gamma', title: 'Docs', originalCwd: '/work/legacy', trashedAt: now - 3000 }),
+  ])
+  const client = createClient(factory, mini, payload)
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  let tree = await mini.settle(section.component)
+  assert.deepEqual(rowTitles(tree), ['Refactor login', 'Fix navbar', 'Docs'])
+  assert.equal(inputByLabel(tree, '搜索回收站').props.placeholder, '搜索标题、Session ID 或原始工作区')
+
+  inputByLabel(tree, '搜索回收站').props.onChange({ target: { value: 'NAVBAR' } })
+  tree = await mini.settle(section.component)
+  assert.deepEqual(rowTitles(tree), ['Fix navbar'])
+  assert.ok(textOf(tree).includes('显示 1 / 3 个会话'))
+
+  inputByLabel(tree, '搜索回收站').props.onChange({ target: { value: 'session-gamma' } })
+  tree = await mini.settle(section.component)
+  assert.deepEqual(rowTitles(tree), ['Docs'])
+
+  inputByLabel(tree, '搜索回收站').props.onChange({ target: { value: '/work/legacy' } })
+  tree = await mini.settle(section.component)
+  assert.deepEqual(rowTitles(tree), ['Docs'])
+
+  inputByLabel(tree, '搜索回收站').props.onChange({ target: { value: 'refactor login' } })
+  tree = await mini.settle(section.component)
+  assert.deepEqual(rowTitles(tree), ['Refactor login'])
+
+  const clear = elementByClass(tree, 'dsh-trash__searchClear')
+  assert.ok(clear !== undefined)
+  assert.equal(clear.props['aria-label'], '清除搜索')
+  clear.props.onClick()
+  tree = await mini.settle(section.component)
+  assert.deepEqual(rowTitles(tree), ['Refactor login', 'Fix navbar', 'Docs'])
+  assert.equal(inputByLabel(tree, '搜索回收站').props.value, '')
+})
+
+test('workspace and expiry filters narrow the list', async () => {
+  const { factory, mini } = await loadModule()
+  const now = Date.now()
+  const payload = statePayloadWith([
+    makeEntry({
+      sessionId: 'session-alpha',
+      title: 'Alpha',
+      originalCwd: '/work/alpha',
+      workspaceNowExists: true,
+      expiresAt: now + 20 * DAY,
+      trashedAt: now - 1000,
+    }),
+    makeEntry({
+      sessionId: 'session-beta',
+      title: 'Beta',
+      originalCwd: '/work/gone',
+      workspaceNowExists: false,
+      requiresOrphanRestore: true,
+      expiresAt: now + 20 * DAY,
+      trashedAt: now - 2000,
+    }),
+    makeEntry({
+      sessionId: 'session-gamma',
+      title: 'Gamma',
+      originalCwd: null,
+      workspaceExistsAtDeletion: null,
+      workspaceNowExists: null,
+      expiresAt: now + 2 * DAY,
+      trashedAt: now - 3000,
+    }),
+  ])
+  const client = createClient(factory, mini, payload)
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  let tree = await mini.settle(section.component)
+  assert.equal(radioByValue(tree, 'all').props.checked, true)
+
+  radioByValue(tree, 'workspace-missing').props.onChange()
+  tree = await mini.settle(section.component)
+  assert.deepEqual(rowTitles(tree), ['Beta'])
+  assert.equal(radioByValue(tree, 'workspace-missing').props.checked, true)
+  assert.ok(textOf(tree).includes('已筛选出 1 个会话'))
+
+  radioByValue(tree, 'workspace-exists').props.onChange()
+  tree = await mini.settle(section.component)
+  assert.deepEqual(rowTitles(tree), ['Alpha'])
+
+  radioByValue(tree, 'expiring').props.onChange()
+  tree = await mini.settle(section.component)
+  assert.deepEqual(rowTitles(tree), ['Gamma'])
+
+  radioByValue(tree, 'all').props.onChange()
+  tree = await mini.settle(section.component)
+  assert.deepEqual(rowTitles(tree), ['Alpha', 'Beta', 'Gamma'])
+})
+
+test('the list pages 50 rows at a time and returns to page one when searching', async () => {
+  const { factory, mini } = await loadModule()
+  const now = Date.now()
+  const entries = Array.from({ length: 55 }, (_, index) =>
+    makeEntry({
+      sessionId: `session-${String(index).padStart(2, '0')}`,
+      title: `Session ${index}`,
+      trashedAt: now - index * 1000,
+    }),
+  )
+  const client = createClient(factory, mini, statePayloadWith(entries))
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  let tree = await mini.settle(section.component)
+  assert.equal(elementsByClass(tree, 'dsh-trash__row').length, 50)
+  assert.deepEqual(rowTitles(tree).slice(0, 2), ['Session 0', 'Session 1'])
+  assert.ok(textOf(tree).includes('第 1 / 2 页'))
+  assert.equal(buttonByText(tree, '上一页').props.disabled, true)
+  assert.equal(buttonByText(tree, '下一页').props.disabled, false)
+  assert.equal(elementByClass(tree, 'dsh-trash__pagination').props['aria-label'], '回收站分页')
+
+  buttonByText(tree, '下一页').props.onClick()
+  tree = await mini.settle(section.component)
+  assert.equal(elementsByClass(tree, 'dsh-trash__row').length, 5)
+  assert.deepEqual(rowTitles(tree), ['Session 50', 'Session 51', 'Session 52', 'Session 53', 'Session 54'])
+  assert.ok(textOf(tree).includes('第 2 / 2 页'))
+  assert.equal(buttonByText(tree, '下一页').props.disabled, true)
+  assert.equal(buttonByText(tree, '上一页').props.disabled, false)
+
+  inputByLabel(tree, '搜索回收站').props.onChange({ target: { value: 'session-5' } })
+  tree = await mini.settle(section.component)
+  assert.equal(elementsByClass(tree, 'dsh-trash__row').length, 5)
+  assert.equal(elementByClass(tree, 'dsh-trash__pagination'), undefined)
+})
+
+test('a search with no matches offers to clear the filters', async () => {
+  const { factory, mini } = await loadModule()
+  const client = createClient(factory, mini, statePayload())
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  let tree = await mini.settle(section.component)
+  const rowCountBefore = elementsByClass(tree, 'dsh-trash__row').length
+
+  inputByLabel(tree, '搜索回收站').props.onChange({ target: { value: 'zzz' } })
+  tree = await mini.settle(section.component)
+  assert.equal(elementsByClass(tree, 'dsh-trash__row').length, 0)
+  assert.ok(textOf(tree).includes('没有匹配的会话'))
+  const clear = buttonByText(tree, '清除筛选')
+  assert.ok(clear !== undefined)
+
+  clear.props.onClick()
+  tree = await mini.settle(section.component)
+  assert.equal(elementsByClass(tree, 'dsh-trash__row').length, rowCountBefore)
+  assert.equal(inputByLabel(tree, '搜索回收站').props.value, '')
+  assert.equal(radioByValue(tree, 'all').props.checked, true)
+})
+
+test('the settings page stylesheet uses theme tokens rather than literal colours', async () => {
+  const { factory, mini } = await loadModule()
+  const client = createClient(factory, mini, statePayload())
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+  let css = ''
+  walk(tree, (element) => {
+    if (element.type === 'style') css = element.children.join('')
+  })
+  assert.ok(css.length > 0)
+  assert.ok(css.includes('var(--dsw-alias-'))
+  assert.doesNotMatch(css, /#[0-9a-fA-F]{3,8}\b/)
+  assert.doesNotMatch(css, /\b(rgb|rgba|hsl|hsla)\(/)
+})
+
+test('the page exposes accessible names for search, filters, and row actions', async () => {
+  const { factory, mini } = await loadModule()
+  const client = createClient(factory, mini, statePayload())
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+
+  assert.equal(inputByLabel(tree, '搜索回收站').props['aria-label'], '搜索回收站')
+  let group
+  walk(tree, (element) => {
+    if (element.props.role === 'radiogroup') group = element
+  })
+  assert.ok(group !== undefined)
+  assert.equal(group.props['aria-label'], '筛选回收站')
+  assert.deepEqual(
+    elementsByClass(tree, 'dsh-trash__filterLabel').map((label) => label.children.join('')),
+    ['全部', '工作区仍存在', '工作区缺失', '即将到期'],
+  )
+  assert.equal(radioByValue(tree, 'all').props.checked, true)
+
+  const restore = buttonByText(tree, '恢复')
+  assert.ok(restore !== undefined)
+  assert.equal(restore.props['aria-label'], '恢复「Alpha」')
+  assert.equal(actionMenus(tree)[0].props.label, '「Alpha」的更多操作')
+})
+
+test('failed automatic cleanup shows a warning banner and retries on demand', async () => {
+  const { factory, mini } = await loadModule()
+  const payload = statePayloadWith([makeEntry({ title: 'Alpha' })])
+  const now = Date.now()
+  payload.stats.cleanup = {
+    enabled: true,
+    timerBacked: true,
+    lastAttemptAt: now - 1000,
+    lastSuccessAt: now - 1000,
+    nextSweepAt: now + 3600_000,
+    retryAt: now + 60_000,
+    consecutiveFailures: 1,
+    lastRun: {
+      at: now - 1000,
+      reason: 'interval',
+      purged: 0,
+      failed: 2,
+      settled: 0,
+      allowPurge: true,
+      durationMs: 5,
+      error: null,
+    },
+  }
+  const client = createClient(factory, mini, payload, {
+    [CLEANUP_ROUTE]: { body: { ok: true, purged: 0, failed: 0, settled: 0 } },
+  })
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+  const text = textOf(tree)
+  assert.ok(text.some((value) => value.includes('上次自动清理有 2 个会话未能删除')))
+  assert.ok(text.some((value) => value.includes('将在')))
+  const retry = buttonByText(tree, '立即重试')
+  assert.ok(retry !== undefined)
+  retry.props.onClick()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(client.calls.filter((entry) => entry.pathname === CLEANUP_ROUTE).length, 1)
+})
+
+test('a healthy cleanup run renders no failure banner', async () => {
+  const { factory, mini } = await loadModule()
+  const payload = statePayload()
+  payload.stats.cleanup = {
+    enabled: true,
+    timerBacked: true,
+    lastAttemptAt: Date.now() - 1000,
+    lastSuccessAt: Date.now() - 1000,
+    nextSweepAt: Date.now() + 3600_000,
+    retryAt: null,
+    consecutiveFailures: 0,
+    lastRun: { at: Date.now() - 1000, reason: 'interval', purged: 0, failed: 0, settled: 0, durationMs: 1, error: null },
+  }
+  const client = createClient(factory, mini, payload)
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+  assert.equal(textOf(tree).some((value) => value.includes('上次自动清理有')), false)
+})
+
+test('a thrown automatic cleanup shows its error in the warning banner', async () => {
+  const { factory, mini } = await loadModule()
+  const payload = statePayload()
+  payload.stats.cleanup = {
+    enabled: true,
+    timerBacked: true,
+    lastAttemptAt: Date.now() - 1000,
+    lastSuccessAt: null,
+    nextSweepAt: Date.now() + 3600_000,
+    retryAt: Date.now() + 60_000,
+    consecutiveFailures: 1,
+    lastRun: {
+      at: Date.now() - 1000,
+      reason: 'interval',
+      purged: 0,
+      failed: 0,
+      settled: 0,
+      allowPurge: true,
+      durationMs: 3,
+      error: 'index unavailable',
+    },
+  }
+  const client = createClient(factory, mini, payload, {
+    [CLEANUP_ROUTE]: { body: { ok: true, purged: 0, failed: 0, settled: 0 } },
+  })
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+  const text = textOf(tree)
+  assert.ok(text.some((value) => value.includes('上次自动清理失败：index unavailable')))
+  const retry = buttonByText(tree, '立即重试')
+  assert.ok(retry !== undefined)
+  retry.props.onClick()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(client.calls.filter((entry) => entry.pathname === CLEANUP_ROUTE).length, 1)
+})
+
+test('copying a Session ID writes the clipboard and reports success', async () => {
+  const { factory, mini } = await loadModule()
+  let copied = null
+  const originalNavigator = globalThis.navigator
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: { clipboard: { async writeText(value) { copied = value } } },
+  })
+  try {
+    const client = createClient(factory, mini, statePayload())
+    const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+    const tree = await mini.settle(section.component)
+    const copy = actionMenus(tree)[0].props.items.find((item) => item.key === 'copy')
+    copy.onSelect()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(copied, 'session-alpha')
+    assert.equal(client.toasts.at(-1).text, '已复制 Session ID')
+    assert.equal(client.toasts.at(-1).success, true)
+  } finally {
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, value: originalNavigator })
+  }
+})
+
+test('revealing the original workspace posts the session and reports success', async () => {
+  const { factory, mini } = await loadModule()
+  const client = createClient(factory, mini, statePayload(), {
+    [REVEAL_ROUTE]: { body: { ok: true, opened: true } },
+  })
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+  const reveal = actionMenus(tree)[0].props.items.find((item) => item.key === 'reveal')
+  assert.equal(reveal.disabled, false)
+  reveal.onSelect()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  const call = client.calls.find((entry) => entry.pathname === REVEAL_ROUTE)
+  assert.deepEqual(JSON.parse(call.options.body), { sessionId: 'session-alpha' })
+  assert.equal(client.toasts.at(-1).text, '已在 Finder 中显示原工作区')
+})
+
+test('forgetting a missing record asks for confirmation and removes it', async () => {
+  const { factory, mini } = await loadModule()
+  const client = createClient(
+    factory,
+    mini,
+    statePayload({
+      state: 'missing',
+      canRestore: false,
+      canPurge: false,
+      canForget: true,
+      expiresAt: null,
+      lastError: 'The trash copy is missing.',
+    }),
+    { [FORGET_ROUTE]: { body: { ok: true, sessionId: 'session-alpha' } } },
+  )
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+  const forget = actionMenus(tree)[0].props.items.find((item) => item.key === 'forget')
+  forget.onSelect()
+  const afterSelect = await mini.settle(section.component)
+  const dialog = dialogOfKind(afterSelect, 'forget')
+  assert.ok(dialog !== undefined)
+  assert.equal(client.calls.filter((entry) => entry.pathname === FORGET_ROUTE).length, 0)
+  dialog.props.onConfirm()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  const call = client.calls.find((entry) => entry.pathname === FORGET_ROUTE)
+  assert.deepEqual(JSON.parse(call.options.body), { sessionId: 'session-alpha' })
+  assert.equal(client.toasts.at(-1).text, '已从回收站列表移除')
+})
