@@ -1,363 +1,142 @@
 # dsh-session-trash
 
-A DeepSeek Harness plugin that adds a **trash** for cold sessions: a session can be
-moved out of the sidebar without losing its log, restored within the retention
-window, or deleted permanently.
+[中文](#中文) | [English](#english)
 
-Built for **DSH 0.2.2-rc.1** (Desktop / Web). Host + Client bundle, no build step.
+## 中文
 
-## Status
+DeepSeek Harness 的会话回收站插件。冷会话可以从侧边栏移出，日志保留在本地；在保留期内可以恢复，到期后自动删除日志。面向 DSH 0.2.2-rc.1 的 Desktop 和 Web，Host 和 Client 在同一个包里，不需要构建步骤。
 
-| Phase | Scope | State |
-|---|---|---|
-| 1 | Package skeleton, path resolution, `.session-trash` layout, index + lock, `GET /state`, `POST /preflight`, HTTP auth, settings page shell, sidebar menu gated by preflight | **implemented** |
-| 2 | `POST /trash`, `POST /restore` (normal), shared Toast with undo, `api-session/removed/added`, startup crash recovery | **implemented** |
-| 3 | Orphan restore, `POST /purge`, `POST /forget`, `POST /cleanup`, `POST /rebuild`, retention sweep, index reconciliation/rebuild, full trash list with row actions | **implemented** |
-| 4 | Trash page polish: search, workspace/expiry filters, 50-row paging, results summary, no-results state, a11y labels, i18n copy, Finder reveal | **implemented** |
-| 5 | Cross-platform and failure hardening, cleanup retry + diagnostics, end-to-end acceptance, final docs | **implemented** |
+当前状态：功能已实现并通过回归测试。macOS 已完成真实 DSH Host 验证；Windows 和 Linux 的路径、锁、重试规则有单测覆盖，尚未在真实主机上验证。
 
-Phase 5 adds:
+### 功能
 
-- **Filesystem hardening.** Transient rename/remove sharing violations are retried;
-  a cross-filesystem copy publishes through a verified temporary sibling and removes
-  it on every failure path, including disk full; path identity is compared
-  case-insensitively on macOS/Windows; Windows reserved device names and trailing
-  dots/spaces are rejected as session-directory segments.
-- **Cleanup retry and diagnostics.** A failed automatic sweep, or a sweep that
-  reports failed purges, is retried with exponential backoff (1 minute, doubling,
-  capped at one hour). `/state` exposes the last attempt/success, next sweep, retry
-  time, consecutive failures, and last run summary. The Trash page shows a warning
-  banner with a “Retry now” action when the last run left failures or threw.
-- **Robustness tests.** Large directories, `ENOSPC`, permission failures, symlink
-  preservation, concurrent trash requests, a session becoming live during the move,
-  cleanup retry/backoff, and a damaged-index write failure.
-- **Real-DSH end-to-end acceptance.** `npm run test:e2e` boots the actual `dsh web`
-  host from the desktop runtime in a throwaway home and drives the entire sequence:
-  trash → undo → trash again → 30-day expiry purge → orphan restore.
+- 在侧边栏右键会话，选择「移入回收站」。只有冷会话、没有持久化子会话、也没有运行中的 turn、job、subagent 或定时任务时，菜单项才会出现。
+- 移入后显示 DSH 共享 Toast，只带一个「撤销」动作。撤销会先尝试正常恢复，原工作区不存在时自动改为孤儿恢复。
+- 设置页「回收站」显示标题、Session ID、原工作区、移入时间、剩余天数、大小和状态。列表支持搜索、筛选和每页 50 条的分页。
+- 行操作包括恢复、恢复为孤儿会话、永久删除、从索引移除、复制 Session ID，以及在 Finder 或资源管理器中显示原工作区。
+- 回收站默认保留 30 天，每 6 小时自动扫描一次。插件激活后和打开回收站页面时也会检查。清理失败会按指数退避重试，失败信息显示在页面上。
+- 索引写入是原子的，旧索引保留为 `.bak`。索引和备份都损坏时进入保护模式，拒绝写操作，并可从每个回收站对象的 `meta.json` 重建。
+- 重命名、分叉、归档、复制 Session ID 继续使用 DSH 自带的侧边栏菜单，本插件不重复实现。
 
-## What it adds
+### 安装
 
-- **Sidebar → right-click a session → “Move to trash”.** The item is hidden unless
-  the Host preflight says the session is a cold, materialized JSONL session with no
-  children and no running work. Choosing it moves the whole session directory into
-  the trash and shows the shared Toast with one action: **Undo**.
-- **Undo.** The Toast action calls `POST /restore`. A normal restore is tried first;
-  if the original workspace directory is gone, the Client retries once with
-  `mode: 'orphan'` automatically. The log returns to its original project directory
-  and the session becomes visible again. Normal restores also restore the Workspace
-  order (detach → attach → insert before the old sibling, or append).
-- **Settings → Trash.** A full list of trashed sessions with title, Session ID,
-  original workspace, trashed date, remaining days, size, status badges, and row
-  actions:
-  - **Search and filters** — search title, Session ID, or original workspace, then
-    narrow the list to all entries, a workspace that still exists, a missing
-    workspace, or entries expiring within three days. The list pages at 50 rows.
-  - **Restore** — normal restore. When the workspace is missing, an orphan
-    confirmation dialog opens instead.
-  - **Restore as orphan** — always available for a trashed row; restores the log
-    and detaches the Workspace so the session appears under “Ungrouped”.
-  - **Delete permanently** — confirmed, danger-coloured; removes the session log
-    directory and the index entry. Not reversible.
-  - **Remove from index** — only for a `missing` row; removes only the index record
-    (plus the plugin's own `meta.json` when it is the last file) and never deletes a
-    session log.
-  - **Copy Session ID** — clipboard with a textarea fallback.
-  - **Show original workspace** — only when the directory still exists; runs the
-    Host's native reveal through `sessionController.openWorkspacePath`.
-- **Retention cleanup.** The Host sweeps once shortly after activation and then
-  every `sweepIntervalHours`; opening the Trash page also schedules a throttled
-  sweep. Entries past `retentionDays` are deleted without a dialog, as configured.
-  The page shows the next sweep and each row's auto-delete date. A failed sweep is
-  retried sooner than the next interval and its failure is shown as a page warning.
-- **`<DSH_HOME>/.session-trash`.** Index, backup, cross-process lock, object
-  directories, and per-object metadata. Created on activation with `0700`
-  permissions; index and metadata files are `0600`.
-
-The plugin deliberately does **not** reimplement rename, fork, archive, or
-“copy session ID”; those stay in the shipped sidebar menu. The trash page has its
-own copy action because the original session row is gone.
-
-## Configuration
-
-Configured through the plugin row in the profile patch:
-
-```yaml
-- id: session-trash
-  name: dsh-session-trash
-  config:
-    retentionDays: 30        # 1–3650
-    sweepIntervalHours: 6    # 1–168
-    enableAutoCleanup: true
-    debug: false
-```
-
-Defaults apply when `config` is omitted. Invalid values reject activation instead of
-falling back silently. Ordinary fields restart the plugin when changed, so the new
-retention window applies to the next sweep. `enableAutoCleanup: false` stops
-scheduled expiry deletion and automatic retries; manual “Delete permanently” and
-“Delete expired” still work.
-
-## HTTP API
-
-All routes live under `/plugins/dsh-session-trash/api/` and are registered as exact
-routes on `ctx.webServer`.
-
-| Method | Path | Phase | Purpose |
-|---|---|---|---|
-| `GET` | `/state` | 1/5 | Config, index summary, entries, stats, cleanup diagnostics; may schedule a page-open sweep |
-| `POST` | `/preflight` | 1 | `{ sessionId }` → `{ eligible: true }` or `{ eligible: false, code, message }` |
-| `POST` | `/trash` | 2 | `{ sessionId }` → `{ ok: true, entry }`; moves the session directory |
-| `POST` | `/restore` | 2/3 | `{ sessionId, mode: 'normal' \| 'orphan' }` → `{ ok: true, session }` |
-| `POST` | `/purge` | 3 | `{ sessionId }` → `{ ok: true, sessionId }`; permanent deletion |
-| `POST` | `/forget` | 3 | `{ sessionId }` → `{ ok: true, sessionId }`; missing entries only, no file deletion |
-| `POST` | `/reveal` | 3 | `{ sessionId }` → `{ ok: true, opened: true }`; reveals the original workspace |
-| `POST` | `/cleanup` | 3/5 | No body → `{ ok: true, purged, failed, settled, cleanup }`; manual sweep |
-| `POST` | `/rebuild` | 3 | No body → `{ ok: true, entries, unindexed }`; only while the index is in protection mode |
-
-Every request must:
-
-1. pass `ctx.connection.requestRejection()` (trusted Host/Origin, browser auth),
-2. pass `ctx.connection.admit()` with `principal.kind === 'owner'`,
-3. carry `X-DSH-Session-Trash: 1` on `POST`,
-4. use `Content-Type: application/json` with a body of at most 64 KiB when a body is read.
-
-A request with any other method is answered `405` with `Allow` naming the accepted
-method. Failures use `{ ok: false, error: { code, message, details? } }`; responses
-are `Cache-Control: no-store`. The absolute trash root is never returned — only
-`dshHomeDisplay()` plus `/.session-trash`.
-
-`/state.stats` now carries:
-
-```json
-{
-  "count": 1,
-  "totalBytes": 184320,
-  "failedEntries": 0,
-  "nextSweepAt": 1762600000000,
-  "cleanup": {
-    "enabled": true,
-    "timerBacked": true,
-    "lastAttemptAt": 1762580000000,
-    "lastSuccessAt": 1762580000000,
-    "nextSweepAt": 1762601600000,
-    "retryAt": null,
-    "consecutiveFailures": 0,
-    "lastRun": {
-      "at": 1762580000000,
-      "reason": "interval",
-      "purged": 0,
-      "failed": 0,
-      "settled": 0,
-      "allowPurge": true,
-      "durationMs": 4,
-      "error": null
-    }
-  }
-}
-```
-
-`failedEntries` counts index entries whose `lastError` is set. `retryAt` is non-null
-while a backoff retry is pending. `lastRun.error` is set when the sweep threw;
-`lastRun.failed` counts per-entry purge failures during an otherwise completed sweep.
-
-### Preflight refusals
-
-`SESSION_NOT_FOUND`, `ALREADY_TRASHED`, `SESSION_NOT_MATERIALIZED`,
-`STORAGE_UNSUPPORTED`, `SESSION_SUBAGENT`, `SESSION_HAS_DESCENDANTS`,
-`SESSION_LINEAGE_UNRESOLVED`, `SESSION_LIVE`, `SESSION_ACTIVE`,
-`UNSAFE_SESSION_DIR`, `INDEX_CORRUPT`, `IO_ERROR`.
-
-A refusal is a normal `200` answer with `eligible: false`; the menu hides the item
-and never shows a disabled entry. Network errors, timeouts, and unknown answers also
-hide the item.
-
-### Restore and maintenance refusals
-
-`TRASH_ENTRY_NOT_FOUND`, `TRASH_STATE_INVALID`, `TRASH_DIR_MISSING`,
-`RESTORE_TARGET_EXISTS`, `WORKSPACE_MISSING`, `RESTORE_VERIFY_FAILED`,
-`UNSAFE_RESTORE_PATH`, `FORGET_NOT_ALLOWED`, `REVEAL_UNAVAILABLE`, `REVEAL_FAILED`,
-`INDEX_CORRUPT`, `INDEX_NOT_CORRUPT`, `LOCKED`, `IO_ERROR`.
-
-## Disk layout
-
-```
-<DSH_HOME>/.session-trash/
-  trash-index.json          # authoritative index
-  trash-index.json.bak      # previous committed index
-  .lock                     # cross-process mutex ({ pid, host, startedAt })
-  objects/
-    <trashId>/
-      meta.json             # written before the session directory moves
-      session/              # the moved session directory (log + session.lock)
-```
-
-The index is written atomically (`tmp` → `fsync` → `rename`) and the previous
-commit is preserved as `.bak`. A failed write removes its temporary file and leaves
-the previous commit intact. A corrupt index with an unusable backup puts the plugin
-into protection mode: it refuses new trash operations, cleanup, restores, and
-permanent deletion, and reports the problem in the settings page. The page then
-offers **Try rebuilding the index**, which scans `objects/*/meta.json`, validates
-each sidecar, and writes a new index. Directories without a usable sidecar are
-reported as unindexed and are never deleted automatically.
-
-On activation and before every sweep the Host reconciles the index with the object
-directories: unindexed objects with valid metadata are imported, entries whose
-object directory vanished are marked `missing`, and a `missing` entry whose object
-reappears is restored to `trashed`. It then settles unfinished `trashing`,
-`restoring`, and `purging` entries: it completes a move whose copy landed, rolls
-back a move whose source is intact, restores a session whose directory is back,
-retries a pending purge, and marks a genuinely lost log as `missing` without
-deleting anything else.
-
-A session moves as one directory. A same-filesystem `rename` is preferred; on
-`EXDEV` the plugin copies into a temporary sibling, verifies regular-file count
-and byte count, publishes with a rename, then removes the source. Symlinks are
-copied as symlinks and never dereferenced. The temporary sibling is removed on
-every failure path, so an `ENOSPC` or permission error never leaves a half-copied
-object behind.
-
-## Cross-platform and failure behavior
-
-- **Transient rename/remove failures** (`EPERM`, `EACCES`, `EBUSY`, `ENOTEMPTY`,
-  `EMFILE`, `ENFILE`, `EAGAIN`) are retried with a short increasing delay. Windows
-  and antivirus-heavy volumes commonly return these for a momentarily open handle.
-- **Path identity** is lowercased for comparison on macOS and Windows. Containment
-  checks (`isInside`, trash object removal, restore target parent) and the
-  `sessionDir`/project-dir equality check use the same rule. On a case-sensitive
-  APFS volume, two paths that differ only by case are treated as the same location.
-- **Windows segments.** A session-directory segment may not be a reserved device
-  name (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`), end in a dot or
-  space, or contain control characters.
-- **Disk full.** A cross-device copy that fails with `ENOSPC` removes its temporary
-  tree and keeps the source; the API reports `IO_ERROR` with `details.code` and
-  `details.phase`.
-- **Permissions.** A read-only trash root fails at object creation with `IO_ERROR`
-  and `phase: "create-object"`; the source session is untouched. A read-only
-  destination parent fails the rename with `phase: "rename"`.
-- **Concurrency.** Mutations run through one in-process serial queue and the disk
-  `.lock`. The lock carries `{ pid, host, startedAt }`, refreshes every 60 seconds
-  for long copies, and is considered stale after 10 minutes. Concurrent trash
-  requests for different sessions both complete; a second request for the same
-  session sees the moved log and fails cleanly.
-- **Live race.** The Host re-checks `sessions.get`/`agents.get` immediately before
-  the move while holding the lock. If the session became live in the gap, the
-  prepared trash object is rolled back and `SESSION_LIVE` is returned.
-- **Stale lock takeover.** Removing a stale lock is retried; if it still cannot be
-  removed, the operation reports `LOCKED` instead of leaking a raw filesystem error.
-
-## Retention, retries, and permanent deletion
-
-- `expiresAt = trashedAt + retentionDays * 86_400_000`; the sweep deletes entries at
-  or past that instant.
-- Cleanup runs after activation (10 s delay), every `sweepIntervalHours`, and on a
-  throttled page open (one hour, or `sweepIntervalHours` when `ctx.timer` is absent).
-- A scheduled sweep that throws, or that reports failed purges, increments
-  `consecutiveFailures` and schedules a retry after `min(1 min × 2^(n−1), 1 h)`.
-  A manual cleanup that fails is recorded in diagnostics but does not schedule an
-  automatic retry. A manual cleanup requested while an automatic sweep is running
-  waits for it and then runs its own sweep with purge permission.
-- A scheduled sweep settles unfinished states but skips expiry deletion when
-  `enableAutoCleanup` is false. Manual cleanup always runs when requested.
-- `missing` entries are skipped by the sweep so their recovery clues survive.
-- Permanent deletion removes only the session log directory. Attachments, images,
-  projection-cache rows, and search-index rows are not deleted; the UI says so in
-  the confirmation dialog.
-
-## Installation
-
-From a workspace containing this package:
+从包含本包的目录执行：
 
 ```text
 plugin_manager install_bundle  target=<absolute path to this directory>
 ```
 
-The bundle patch inserts one Host row (`session-trash`) and the `dsh.client` section
-registers the browser module. A local development profile can also link the package
-directly:
+目录链接形式的 bundle 会使用自己的 `node_modules`，安装前先在包目录运行 `pnpm install`。
+
+本地开发也可以把包链接到 profile：
 
 ```bash
 cd ~/.dsh/profiles/desktop
 pnpm add link:/absolute/path/to/dsh-session-trash
 ```
 
-Then add `dsh-session-trash` to `dsh.profile.bundles` in that profile's
-`package.json`. Restart the Desktop app or reopen the profile to load the Host row;
-the Client module is picked up from the `dsh.client` manifest on the next page load.
+然后把 `dsh-session-trash` 加入该 profile `package.json` 的 `dsh.profile.bundles`。重启 Desktop 后加载 Host，刷新页面后加载 Client。
 
-The package declares two dependencies, both pinned to the DSH release it targets:
+运行时依赖 `@deepseek-ai/dsh-home-paths@0.2.2-rc.1` 和 `@deepseek-ai/schemastery@3.19.0`。
 
-| Dependency | Version | Why |
+卸载时从 profile 的 bundles 和依赖中移除 `dsh-session-trash`，然后重启 Desktop。卸载不会删除 `<DSH_HOME>/.session-trash`，需要清理时手动删除该目录。
+
+### 配置
+
+在 profile patch 的插件行中配置：
+
+```yaml
+- id: session-trash
+  name: dsh-session-trash
+  config:
+    retentionDays: 30        # 1-3650
+    sweepIntervalHours: 6    # 1-168
+    enableAutoCleanup: true
+    debug: false
+```
+
+| 字段 | 默认 | 范围 | 说明 |
+|---|---|---|---|
+| `retentionDays` | `30` | 1-3650 | 回收站保留天数，到期自动删除 |
+| `sweepIntervalHours` | `6` | 1-168 | 自动清理间隔 |
+| `enableAutoCleanup` | `true` | boolean | 关闭后仍可手动永久删除，不自动清理 |
+| `debug` | `false` | boolean | 输出更详细的诊断日志 |
+
+省略 `config` 时使用默认值。配置值不合法时插件拒绝激活，不会回退到默认值。修改普通字段会重启插件。
+
+### 使用
+
+右键冷会话选择「移入回收站」。Toast 消失后，仍可从设置页的「回收站」恢复。恢复时如果原工作区目录已不存在，页面会先弹出确认，确认后会话回到「未分组」。
+
+当前 DSH 版本会把打开过的会话保留为 live agent，直到该 Host 进程结束。即使它已经空闲，菜单项也不会出现；需要回收时先重启 DSH，或者直接归档。另一个 DSH 实例不会识别这种 live 状态，不要用它绕过限制。
+
+### HTTP API
+
+所有路由位于 `/plugins/dsh-session-trash/api/`，以精确路径（exact route）注册在 `ctx.webServer` 上。
+
+| 方法 | 路径 | 说明 |
 |---|---|---|
-| `@deepseek-ai/dsh-home-paths` | `0.2.2-rc.1` | required resolution of `$DSH_HOME` / `~/.dsh` |
-| `@deepseek-ai/schemastery` | `3.19.0` | builds the plugin `Config` schema |
+| `GET` | `/state` | 配置、索引状态、条目、统计和清理诊断；打开页面时可能触发一次节流清理 |
+| `POST` | `/preflight` | `{ sessionId }` 返回 `{ eligible: true }` 或 `{ eligible: false, code, message }` |
+| `POST` | `/trash` | `{ sessionId }`，移动会话目录 |
+| `POST` | `/restore` | `{ sessionId, mode: 'normal' \| 'orphan' }` |
+| `POST` | `/purge` | `{ sessionId }`，永久删除会话日志 |
+| `POST` | `/forget` | `{ sessionId }`，仅移除 `missing` 条目的索引记录 |
+| `POST` | `/reveal` | `{ sessionId }`，打开原工作区 |
+| `POST` | `/cleanup` | 无请求体，手动执行一次清理 |
+| `POST` | `/rebuild` | 无请求体，仅在索引保护模式下重建 |
 
-A bundle installed as a directory link keeps its own `node_modules`, so run
-`pnpm install` here before installing the bundle. A bundle unpacked into the
-profile could instead resolve these from the Harness installation.
+请求需要通过 `ctx.connection.requestRejection()` 和 `ctx.connection.admit()`，`POST` 还要带 `X-DSH-Session-Trash: 1`。读取请求体时使用 `Content-Type: application/json`，上限 64 KiB。响应带 `Cache-Control: no-store`，不会返回回收站根目录的绝对路径。
 
-### Uninstall and upgrade
+失败响应格式为 `{ ok: false, error: { code, message, details? } }`。预检拒绝码包括 `SESSION_NOT_FOUND`、`ALREADY_TRASHED`、`SESSION_NOT_MATERIALIZED`、`STORAGE_UNSUPPORTED`、`SESSION_SUBAGENT`、`SESSION_HAS_DESCENDANTS`、`SESSION_LINEAGE_UNRESOLVED`、`SESSION_LIVE`、`SESSION_ACTIVE`、`UNSAFE_SESSION_DIR`、`INDEX_CORRUPT` 和 `IO_ERROR`。
 
-1. Remove `dsh-session-trash` from the profile's `dsh.profile.bundles` and its
-   dependencies (or run the plugin manager's remove action).
-2. Restart the Desktop app.
-3. The plugin never deletes `<DSH_HOME>/.session-trash` on uninstall. Keep it to
-   restore the logs later by reinstalling the plugin, or remove it manually once no
-   session log in it is needed.
+恢复和维护拒绝码包括 `TRASH_ENTRY_NOT_FOUND`、`TRASH_STATE_INVALID`、`TRASH_DIR_MISSING`、`RESTORE_TARGET_EXISTS`、`WORKSPACE_MISSING`、`RESTORE_VERIFY_FAILED`、`UNSAFE_RESTORE_PATH`、`FORGET_NOT_ALLOWED`、`REVEAL_UNAVAILABLE`、`REVEAL_FAILED`、`INDEX_CORRUPT`、`INDEX_NOT_CORRUPT`、`LOCKED` 和 `IO_ERROR`。
 
-Upgrades are ordinary bundle reinstalls. The index schema is versioned; an
-unsupported index version enters protection mode rather than being rewritten.
+`/state` 的 `stats.cleanup` 记录上次清理时间、下次清理时间、重试时间、连续失败次数和上次运行摘要。
 
-## Verification
+### 数据与恢复
 
-The package has no build step. Run the Node test suite from this directory:
+```text
+<DSH_HOME>/.session-trash/
+  trash-index.json          # 主索引
+  trash-index.json.bak      # 上一次成功提交的索引
+  .lock                     # 跨进程锁
+  objects/
+    <trashId>/
+      meta.json             # 对象元数据
+      session/              # 被移动的会话目录
+```
+
+索引通过 `tmp`、`fsync`、`rename` 原子提交，旧版本保留为 `.bak`。启动时和每次清理前，插件会处理未完成的 `trashing`、`restoring`、`purging` 状态：能完成的完成，能回滚的回滚，无法判断的标记为 `missing`，不会删除会话日志。
+
+同文件系统移动使用 `rename`。跨文件系统时先复制到临时目录，校验普通文件数量和字节数，再 rename 发布，最后删除源目录。任一步失败都会清理临时目录并保留源。符号链接按符号链接复制，不跟随。
+
+在 POSIX 文件系统上，回收站目录权限为 `0700`，索引和元数据为 `0600`。锁文件超过 10 分钟未更新时视为陈旧。
+
+### 限制
+
+- 当前 DSH 版本中，打开过的会话会保持 live 直到 Host 进程结束，因此不会显示「移入回收站」。需要回收时重启 DSH。
+- 带子会话的父会话和 subagent 会话不能单独回收，只能归档整棵树。
+- 孤儿恢复不会重建原工作区目录，也不会重新挂到工作区。
+- 归档和置顶状态会跨回收、恢复保留，回收站页面不管理这两个集合。
+- 永久删除只删除会话日志。附件、图片、投影缓存和搜索索引不会被删除。
+- `/state` 一次返回全部条目摘要，页面在客户端搜索、筛选和分页。
+- 没有跨窗口实时推送。另一个窗口的变更要等刷新或窗口重新获得焦点后出现。
+- Windows 和 Linux 尚未在真实主机上验证。Windows 超过 260 字符的长路径和符号链接复制受系统设置影响。
+- macOS 的路径比较按大小写不敏感处理。在大小写敏感的 APFS 卷上，仅大小写不同的两个路径会被视为同一位置。
+- 多个 DSH 进程共享同一个 `DSH_HOME` 时，回收站操作通过 `.lock` 串行；进程暂停超过 10 分钟后，锁可能被另一个进程接管。
+
+### 开发
 
 ```bash
 pnpm install
 pnpm test
-```
-
-The suite covers the Host service, `Config` schema bounds, index/lock/recovery,
-cleanup scheduling/retry, HTTP auth and routing, the real Client section (through a
-small hook-capable React substitute), and the Phase 5 hardening cases. It does not
-need the desktop app.
-
-The real-Host regression boots the actual `dsh web` host from the installed desktop
-runtime in a throwaway DSH home:
-
-```bash
 npm run test:e2e
 ```
 
-It creates a temporary `web` profile that links this package, writes twelve
-compressed JSONL sessions and a workspace registry, starts the host on a random
-port, mints a browser cookie from the printed launch token, and asserts 13 feature
-groups:
+`npm run test:e2e` 会启动真实 `dsh web` Host，在临时 `DSH_HOME` 中跑完整流程。默认使用 `/Applications/DeepSeek Harness.app`，也可以用 `DSH_ELECTRON` 指向其他 Electron 可执行文件。设置 `DSH_E2E_KEEP=1` 可以保留临时目录和日志。
 
-1. `GET /state` projection and cleanup diagnostics; the boot HTML registers
-   `dsh-session-trash/client.js`.
-2. HTTP contract: unauthenticated `401`, missing CSRF `403`, wrong method `405`,
-   wrong content type / malformed / oversized body / invalid restore mode `400`.
-3. Preflight and trash refusal matrix: missing session, subagent origin, parent
-   with a persisted child; refused sessions stay on disk.
-4. Trash and Toast-style undo/normal restore with the Workspace reattached.
-5. Normal restore keeps the original Workspace sibling order.
-6. Reveal guard for an unknown entry.
-7. Cleanup failure diagnostics (`purging`, `lastError`, `failed`, consecutive
-   failures) and manual recovery; automatic retry/backoff is covered by unit tests.
-8. Forget only after an object disappears; the entry becomes `missing` and can be
-   removed from the index without deleting session files.
-9. Permanent purge removes the object and index entry.
-10. 30-day expiry purge through a real sweep.
-11. Corrupt-index protection mode (`500 INDEX_CORRUPT`, preflight refusal) and
-    rebuild from `meta.json`; a healthy index refuses rebuild with `409`.
-12. Reveal missing-workspace guard, orphan restore, and Workspace detach.
-13. Final index/object invariants.
-
-Set `DSH_E2E_KEEP=1` to keep the temporary home and the server log; set
-`DSH_ELECTRON` to point at another Electron executable.
-
-`test/smoke-host.mjs` is a lower-level Host check against the installed Cordis
-runtime. It requires a throwaway `DSH_HOME` and the desktop Electron binary:
+Host 冒烟测试需要单独的临时 `DSH_HOME`：
 
 ```bash
 DSH_HOME=$(mktemp -d) ELECTRON_RUN_AS_NODE=1 \
@@ -365,89 +144,168 @@ DSH_HOME=$(mktemp -d) ELECTRON_RUN_AS_NODE=1 \
   test/smoke-host.mjs
 ```
 
-It registers the nine routes, drives trash/restore/purge/cleanup/rebuild through
-the real route handlers, and verifies the session directory moves, returns, and is
-deleted.
+项目结构：
 
-## Acceptance checklist (Phase 5)
-
-- [x] Cold session trash, undo, and normal restore with Workspace order.
-- [x] Orphan restore after the workspace directory disappears; Workspace detach.
-- [x] 30-day expiry purge, manual permanent deletion, `missing` entry handling.
-- [x] Index protection mode and rebuild from `meta.json` sidecars.
-- [x] Live/active/subagent/descendant sessions never show the menu action; the Host
-      rejects them anyway.
-- [x] Large directory move and cross-device copy; symlinks are not dereferenced.
-- [x] `ENOSPC`, read-only trash root, read-only destination parent, failed index
-      write: source and previous state preserved.
-- [x] Concurrent trash requests serialize and keep every committed entry.
-- [x] A session becoming live during the move rolls back the prepared object.
-- [x] Automatic cleanup retry with exponential backoff, diagnostics in `/state`,
-      and a settings-page warning banner with a retry action.
-- [x] macOS path/lock/rename behavior exercised on this machine.
-- [x] Windows path rules (reserved names, trailing dots/spaces, drive and case
-      comparison) covered by unit tests.
-- [x] Real `dsh web` host end-to-end regression: auth/CSRF/method/body contract,
-      preflight refusal matrix, trash/undo, Workspace order, forget, purge, expiry,
-      corrupt-index rebuild, reveal guards, and orphan restore.
-- [x] README installation, uninstall, known limitations, and recovery boundaries.
-- [ ] Real Windows/Linux acceptance run on those operating systems. The code and
-      unit tests are hardened for them, but this workspace only has macOS.
-
-## Known limitations (Phase 5)
-
-- **Platform coverage.** macOS is verified end-to-end. Windows and Linux paths,
-  lock behavior, and retry rules are implemented and unit-tested, but no real
-  Windows or Linux host has been exercised here. Windows long paths over 260
-  characters need system long-path support; copying symlinks needs the usual
-  Windows privilege.
-- **Case-sensitive APFS.** Path identity is compared case-insensitively on macOS.
-  On the uncommon case-sensitive APFS volume, two paths differing only by case are
-  treated as the same location for containment and restore-parent checks.
-- **The whole index is returned by `/state`.** The page filters and pages on the
-  client, so a very large trash sends every entry summary in one response (accepted
-  for v1).
-- **No cross-window live push.** Open trash pages refresh on revision, window focus,
-  and visibility change; another window’s mutation appears at the next refresh.
-- **Session trees.** Sessions with child sessions, subagent sessions, live sessions,
-  and sessions with running work can never be trashed; archive the tree instead.
-  Cascading trash is not implemented.
-- **Orphan restore** never recreates the original directory, never reattaches the
-  Workspace, and does not re-link it if the directory reappears later.
-- **Archive and pin state** is preserved across trash/restore. The trash page does
-  not manage those sets; an archived session stays archived after restore.
-- **Permanent deletion is log-only.** Attachments, images, projection-cache rows,
-  and search-index rows survive and are cleaned by DSH later (or not at all). The
-  UI calls this “delete the session log”.
-- **Missing entries** are never removed automatically by the sweep; the owner must
-  use “Remove from index” after confirming the log is gone.
-- **Shared `DSH_HOME`.** Multiple DSH processes sharing one home serialize through
-  `.lock`; a lock older than 10 minutes can be taken over. If a process is paused
-  for longer than that while holding the lock, another process may take over.
-
-## Layout
-
-```
-package.json         # bundle manifest, exports, dsh.client
-cordis.patch.yml     # inserts the Host row
-index.js             # Host apply + Config + service wiring
-client.js            # Client module (trash page, context menu, icons)
-lib/errors.js        # error codes, wire errors, path-segment guard
-lib/paths.js         # @deepseek-ai/dsh-home-paths resolution
-lib/store.js         # layout, atomic index, object metadata, cross-process lock
-lib/fsops.js         # path identity, retryable rename/remove, directory moves
-lib/eligibility.js   # preflight predicate and its cache
-lib/inventory.js     # object scan, index reconcile, index rebuild
-lib/trash-service.js # trash, restore (normal/orphan), purge, forget, reveal, sweep, recovery
-lib/cleanup.js       # retention sweep scheduling, retry/backoff, diagnostics
-lib/state.js         # read-only /state projection
-lib/http.js          # route registration, auth, JSON shaping
-locale/en.json       # plugin display metadata (en)
-locale/zh.json       # plugin display metadata (zh)
-icon.svg             # package tile: DSH trash artwork on a brand tile
-test/                # Node unit tests, Host smoke test, real-dsh web e2e
+```text
+index.js              Host 入口、Config 和服务装配
+client.js             Client 界面、侧边栏菜单和 Toast
+lib/                  索引、锁、移动、资格判断、清理、HTTP 和状态投影
+locale/               插件显示名称和描述
+test/                 单测、Host 冒烟测试、真实 dsh web 端到端测试
 ```
 
-The trash glyph (menu entry, settings navigation, empty state) reproduces the
-`trash-outline` artwork from the DeepSeek Harness product icon set, so it matches the
-shipped “Delete workspace” icon. That artwork is MIT licensed, © 2026 DeepSeek.
+回收站图标使用 DeepSeek Harness 产品图标集中的 `trash-outline` 图形，MIT 许可，© 2026 DeepSeek。
+
+## English
+
+A session trash for DeepSeek Harness. Move cold sessions out of the sidebar without deleting their logs, restore them within the retention window, or delete the logs permanently. Built for DSH 0.2.2-rc.1 on Desktop and Web. Host and Client ship in one package, with no build step.
+
+Status: feature complete and covered by the regression suite. macOS has been verified against a real DSH Host. Windows and Linux path, lock, and retry rules have unit coverage but have not been run on those systems.
+
+### Features
+
+- Right-click a session in the sidebar and choose "Move to trash". The item appears only for cold sessions with no persisted children and no running turn, job, subagent, or scheduled task.
+- After the move, the shared DSH Toast offers one action: Undo. Undo tries a normal restore first and falls back to an orphan restore when the original workspace is gone.
+- The Trash page in Settings shows title, Session ID, original workspace, trashed date, remaining days, size, and status. The list supports search, filters, and paging at 50 rows per page.
+- Row actions include restore, restore as orphan, permanent deletion, removal from the index, copying the Session ID, and revealing the original workspace in Finder or Explorer.
+- Cleanup keeps entries for 30 days by default and runs every 6 hours. It also runs shortly after activation and when the Trash page opens. Failed cleanup runs are retried with exponential backoff, and the page shows the failure.
+- The index is committed atomically and the previous index is kept as `.bak`. If both the index and the backup are unreadable, the plugin enters protection mode and can rebuild the index from each object's `meta.json`.
+- Rename, fork, archive, and copy Session ID stay in the shipped DSH sidebar menu. This plugin does not reimplement them.
+
+### Installation
+
+From the directory that contains this package:
+
+```text
+plugin_manager install_bundle  target=<absolute path to this directory>
+```
+
+A bundle installed as a directory link uses its own `node_modules`, so run `pnpm install` in the package directory before installing the bundle.
+
+For local development, link the package into a profile:
+
+```bash
+cd ~/.dsh/profiles/desktop
+pnpm add link:/absolute/path/to/dsh-session-trash
+```
+
+Then add `dsh-session-trash` to `dsh.profile.bundles` in that profile's `package.json`. Restart Desktop to load the Host, then refresh the page to load the Client.
+
+Runtime dependencies are `@deepseek-ai/dsh-home-paths@0.2.2-rc.1` and `@deepseek-ai/schemastery@3.19.0`.
+
+To uninstall, remove `dsh-session-trash` from the profile bundles and dependencies, then restart Desktop. Uninstalling does not delete `<DSH_HOME>/.session-trash`; remove that directory manually when its session logs are no longer needed.
+
+### Configuration
+
+Configure the plugin row in the profile patch:
+
+```yaml
+- id: session-trash
+  name: dsh-session-trash
+  config:
+    retentionDays: 30        # 1-3650
+    sweepIntervalHours: 6    # 1-168
+    enableAutoCleanup: true
+    debug: false
+```
+
+| Field | Default | Range | Description |
+|---|---|---|---|
+| `retentionDays` | `30` | 1-3650 | Days a trashed session is kept before automatic deletion |
+| `sweepIntervalHours` | `6` | 1-168 | Hours between automatic cleanup sweeps |
+| `enableAutoCleanup` | `true` | boolean | When false, cleanup no longer deletes expired entries automatically |
+| `debug` | `false` | boolean | Emit detailed diagnostic logs |
+
+Defaults apply when `config` is omitted. Invalid values reject activation instead of falling back to defaults. Changing an ordinary field restarts the plugin.
+
+### Usage
+
+Right-click a cold session and choose "Move to trash". After the Toast disappears, open Settings, then Trash, and restore the session. If the original workspace directory is gone, the page asks for confirmation and restores the session as an orphan under "Ungrouped".
+
+The current DSH version keeps a live agent for a session after it is opened, until the Host process exits. A session is still live even when idle, so the menu item stays hidden. Restart DSH before trashing it, or archive it instead. A second DSH instance does not detect a session that is live in another process, so do not use one to bypass this check.
+
+### HTTP API
+
+All routes live under `/plugins/dsh-session-trash/api/` and are registered as exact routes on `ctx.webServer`.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/state` | Config, index state, entries, stats, and cleanup diagnostics; may schedule a throttled page-open cleanup |
+| `POST` | `/preflight` | `{ sessionId }` returns `{ eligible: true }` or `{ eligible: false, code, message }` |
+| `POST` | `/trash` | `{ sessionId }`; moves the session directory |
+| `POST` | `/restore` | `{ sessionId, mode: 'normal' \| 'orphan' }` |
+| `POST` | `/purge` | `{ sessionId }`; permanently deletes the session log |
+| `POST` | `/forget` | `{ sessionId }`; removes only a `missing` index entry |
+| `POST` | `/reveal` | `{ sessionId }`; opens the original workspace |
+| `POST` | `/cleanup` | No body; runs one cleanup sweep |
+| `POST` | `/rebuild` | No body; rebuilds the index only in protection mode |
+
+Requests must pass `ctx.connection.requestRejection()` and `ctx.connection.admit()`. `POST` requests also carry `X-DSH-Session-Trash: 1`. JSON bodies use `Content-Type: application/json` and are limited to 64 KiB. Responses use `Cache-Control: no-store` and never expose the absolute trash root.
+
+Failures use `{ ok: false, error: { code, message, details? } }`. Preflight refusals include `SESSION_NOT_FOUND`, `ALREADY_TRASHED`, `SESSION_NOT_MATERIALIZED`, `STORAGE_UNSUPPORTED`, `SESSION_SUBAGENT`, `SESSION_HAS_DESCENDANTS`, `SESSION_LINEAGE_UNRESOLVED`, `SESSION_LIVE`, `SESSION_ACTIVE`, `UNSAFE_SESSION_DIR`, `INDEX_CORRUPT`, and `IO_ERROR`.
+
+Restore and maintenance refusals include `TRASH_ENTRY_NOT_FOUND`, `TRASH_STATE_INVALID`, `TRASH_DIR_MISSING`, `RESTORE_TARGET_EXISTS`, `WORKSPACE_MISSING`, `RESTORE_VERIFY_FAILED`, `UNSAFE_RESTORE_PATH`, `FORGET_NOT_ALLOWED`, `REVEAL_UNAVAILABLE`, `REVEAL_FAILED`, `INDEX_CORRUPT`, `INDEX_NOT_CORRUPT`, `LOCKED`, and `IO_ERROR`.
+
+`/state.stats.cleanup` reports the last cleanup attempt, the next sweep, a pending retry, consecutive failures, and the last run summary.
+
+### Storage and recovery
+
+```text
+<DSH_HOME>/.session-trash/
+  trash-index.json          # authoritative index
+  trash-index.json.bak      # previous committed index
+  .lock                     # cross-process lock
+  objects/
+    <trashId>/
+      meta.json             # object metadata
+      session/              # the moved session directory
+```
+
+The index is committed atomically with `tmp`, `fsync`, and `rename`, and the previous commit is kept as `.bak`. On activation and before every sweep, the plugin settles unfinished `trashing`, `restoring`, and `purging` entries. It completes what can be completed, rolls back what can be rolled back, marks uncertain cases as `missing`, and never deletes a session log during that recovery pass.
+
+A same-filesystem move uses `rename`. A cross-filesystem move copies into a temporary directory, verifies regular-file count and byte count, publishes with `rename`, then removes the source. Any failure cleans up the temporary directory and keeps the source. Symlinks are copied as symlinks, not followed.
+
+On POSIX filesystems, the trash root uses `0700` permissions and the index and metadata files use `0600`. A lock older than 10 minutes is treated as stale.
+
+### Limitations
+
+- The current DSH version keeps an opened session live until the Host process exits. The "Move to trash" item stays hidden for such a session. Restart DSH before trashing it.
+- Parent sessions with persisted children and subagent sessions cannot be trashed on their own. Archive the whole tree instead.
+- Orphan restore never recreates the original workspace directory and never reattaches the session to a workspace.
+- Archive and pin state survive trash and restore. The Trash page does not manage either set.
+- Permanent deletion removes the session log only. Attachments, images, projection-cache rows, and search-index rows are not deleted.
+- `/state` returns all entry summaries in one response. Search, filtering, and paging happen in the Client.
+- There is no cross-window live push. Another window's change appears after a refresh or when the window regains focus.
+- Windows and Linux have not been run on real hosts. On Windows, long paths over 260 characters and symlink copying depend on system configuration.
+- macOS path comparison is case-insensitive. On a case-sensitive APFS volume, paths that differ only by case are treated as the same location.
+- Multiple DSH processes sharing one `DSH_HOME` serialize trash operations through `.lock`. A process paused for more than 10 minutes can lose the lock to another process.
+
+### Development
+
+```bash
+pnpm install
+pnpm test
+npm run test:e2e
+```
+
+`npm run test:e2e` boots a real `dsh web` Host in a temporary `DSH_HOME` and runs the full flow. It uses `/Applications/DeepSeek Harness.app` by default; set `DSH_ELECTRON` to another Electron executable. Set `DSH_E2E_KEEP=1` to keep the temporary home and logs.
+
+The Host smoke test needs a separate temporary `DSH_HOME`:
+
+```bash
+DSH_HOME=$(mktemp -d) ELECTRON_RUN_AS_NODE=1 \
+  "/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness" \
+  test/smoke-host.mjs
+```
+
+Project layout:
+
+```text
+index.js              Host entry, Config, and service wiring
+client.js             Client UI, sidebar menu, and Toast
+lib/                  index, lock, moves, eligibility, cleanup, HTTP, and state
+locale/               plugin display names and descriptions
+test/                 unit tests, Host smoke test, real dsh web e2e
+```
+
+The trash icon uses the `trash-outline` artwork from the DeepSeek Harness product icon set, MIT licensed, © 2026 DeepSeek.
