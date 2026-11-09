@@ -57,18 +57,23 @@ async function createTempHome(prefix) {
  */
 async function writeProfile(home) {
   const profile = path.join(home, 'profiles', 'web')
-  await fs.mkdir(path.join(profile, 'node_modules'), { recursive: true })
-  await fs.symlink(REPO, path.join(profile, 'node_modules', 'dsh-session-trash'), 'dir')
+  const linked = path.join(profile, 'node_modules', '@wangxiaocuo')
+  await fs.mkdir(linked, { recursive: true })
+  await fs.symlink(REPO, path.join(linked, 'dsh-session-trash'), 'dir')
   await fs.writeFile(
     path.join(profile, 'package.json'),
     `${JSON.stringify(
       {
         name: 'dsh-profile-web',
         private: true,
-        dependencies: { 'dsh-session-trash': `link:${REPO}` },
+        dependencies: { '@wangxiaocuo/dsh-session-trash': `link:${REPO}` },
         dsh: {
           profile: {
-            bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'dsh-session-trash'],
+            bundles: [
+              '@deepseek-ai/dsh-base',
+              '@deepseek-ai/dsh-web-app',
+              '@wangxiaocuo/dsh-session-trash',
+            ],
           },
         },
       },

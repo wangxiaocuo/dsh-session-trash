@@ -43,7 +43,7 @@ async function loadClientModule() {
     }
     await import(pathToFileURL(path.resolve('client.js')).href)
     assert.equal(loaded.length, 1)
-    assert.equal(loaded[0].id, 'dsh-session-trash')
+    assert.equal(loaded[0].id, '@wangxiaocuo/dsh-session-trash')
     clientFactory = loaded[0].factory
   }
   return clientFactory((name) => {

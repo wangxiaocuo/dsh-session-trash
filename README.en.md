@@ -2,13 +2,11 @@
 
 [简体中文](./README.md) | English
 
-Repository: [GitHub](https://github.com/wangxiaocuo/dsh-session-trash)
-
-English translation of [README.md](./README.md).
+[GitHub](https://github.com/wangxiaocuo/dsh-session-trash) · [npm](https://www.npmjs.com/package/@wangxiaocuo/dsh-session-trash)
 
 A session trash for DeepSeek Harness. Move cold sessions out of the sidebar without deleting their logs, restore them within the retention window, or delete the logs permanently. Built for DSH 0.2.2-rc.1 on Desktop and Web. Host and Client ship in one package, with no build step.
 
-Status: feature complete and covered by the regression suite. macOS has been verified against a real DSH Host. Windows and Linux path, lock, and retry rules have unit coverage but have not been run on those systems.
+Status: feature complete and covered by the regression suite. macOS has been verified on a real DSH Host. Windows and Linux path, lock, and retry rules have unit coverage but have not been run on those systems.
 
 ## Features
 
@@ -19,35 +17,63 @@ Status: feature complete and covered by the regression suite. macOS has been ver
 - The toolbar's "Delete all permanently" empties the whole trash after one confirmation: it deletes every trashed session log and drops file-missing records from the index. Attachments, images, and search-index rows are not deleted.
 - Cleanup keeps entries for 30 days by default and runs every 6 hours. It also runs shortly after activation and when the Trash page opens. Failed cleanup runs are retried with exponential backoff, and the page shows the failure.
 - The index is committed atomically and the previous index is kept as `.bak`. If both the index and the backup are unreadable, the plugin enters protection mode and can rebuild the index from each object's `meta.json`.
-- Rename, fork, archive, and copy Session ID stay in the shipped DSH sidebar menu. This plugin does not reimplement them.
+- Rename, fork, archive, and copy Session ID stay in the shipped DSH sidebar menu. The plugin does not reimplement them.
 
 ## Installation
 
-Clone the repository:
+The plugin is published on npm ([`@wangxiaocuo/dsh-session-trash`](https://www.npmjs.com/package/@wangxiaocuo/dsh-session-trash)); the plugin dialog also accepts a GitHub address or a local directory.
+
+Installation and removal use the current profile's pnpm. Desktop bundles pnpm; a `dsh web` started from source needs pnpm on `PATH`, and installing from GitHub also needs git and working access to GitHub.
+
+### Install from DSH (recommended)
+
+1. Open the **Plugins** panel in the sidebar and click **Add plugin**.
+2. In **Package name or address**, enter `@wangxiaocuo/dsh-session-trash`. To install the latest code on the current branch, enter `git+https://github.com/wangxiaocuo/dsh-session-trash.git` instead.
+3. Leave the **Registry** at its default. The plugin and its dependencies come from npm; on a slow network, switch to **Mainland China mirror**. The mirror can lag the official registry by a few minutes.
+4. Click **Install**. DSH resolves the package name, description, and version, then runs pnpm. The command and output are under **Show install details**.
+5. Click **Enable now** when it finishes. Restart DSH if prompted and refresh the page in the Web app. The context menu and the Trash settings page appear afterwards.
+
+Local directory: clone the repository, run `pnpm install` in the directory (a directory-link bundle uses its own `node_modules`), then enter the absolute path of that directory.
+
+If an install fails, start with the pnpm output and the Host log path under **Show install details**:
+
+- No such plugin was found: check the spelling, wait for the mirror, or install from a Git address or local directory instead.
+- No registry could be reached: check the network or proxy, or install from a local directory.
+- The package declares no bundle, or the path is not a valid plugin package: the Git address must point at the repository root, and a local path must be the package directory.
+- The install finished but nothing shows up: make sure the bundle is enabled on the Plugins page; a profile without HMR needs a DSH restart, and the Web client needs a page refresh.
+
+### Let the agent install it
+
+Ask the agent to run one of these. The operation needs `danger-full-access` or a separate approval:
+
+```text
+plugin_manager install_bundle  target=@wangxiaocuo/dsh-session-trash
+plugin_manager install_bundle  target=git+https://github.com/wangxiaocuo/dsh-session-trash.git
+plugin_manager install_bundle  target=/absolute/path/to/dsh-session-trash
+```
+
+Installing the directory saves a download when a clone already exists. With the DSH CLI installed, `dsh plugin add <the same spec>` is equivalent.
+
+### Link into a profile manually (development)
 
 ```bash
 git clone https://github.com/wangxiaocuo/dsh-session-trash.git
 cd dsh-session-trash
+pnpm install
 ```
-
-A bundle installed as a directory link uses its own `node_modules`, so run `pnpm install` in the package directory before installing the bundle. Then install the current directory with `plugin_manager` in DSH:
-
-```text
-plugin_manager install_bundle  target=<absolute path to this directory>
-```
-
-For local development, link the package into a profile:
 
 ```bash
 cd "${DSH_HOME:-$HOME/.dsh}/profiles/desktop"
 pnpm add link:/absolute/path/to/dsh-session-trash
 ```
 
-Then add `dsh-session-trash` to `dsh.profile.bundles` in that profile's `package.json`. Restart Desktop to load the Host, then refresh the page to load the Client.
+Then add `@wangxiaocuo/dsh-session-trash` to `dsh.profile.bundles` in that profile's `package.json`, restart DSH to load the Host, and refresh the page to load the Client. Runtime dependencies are `@deepseek-ai/dsh-home-paths@0.2.2-rc.1` and `@deepseek-ai/schemastery@3.19.0`.
 
-Runtime dependencies are `@deepseek-ai/dsh-home-paths@0.2.2-rc.1` and `@deepseek-ai/schemastery@3.19.0`.
+### Upgrade and uninstall
 
-To uninstall, remove `dsh-session-trash` from the profile bundles and dependencies, then restart Desktop. Uninstalling does not delete `<DSH_HOME>/.session-trash`; remove that directory manually when its session logs are no longer needed.
+For an npm install, open Session trash on the Plugins panel and click **Update** in the **Versions** section; when no newer version is offered, uninstall and install again. A Git install only picks up new code after reinstallation. For a manual link, run `git pull` and `pnpm install` in the directory, restart DSH, then refresh the page.
+
+To uninstall, open the same detail page, click **Uninstall**, and confirm; the profile dependency is removed. You can also remove it from the profile bundles and dependencies by hand and restart. Uninstalling does not delete `<DSH_HOME>/.session-trash`; delete that directory manually when its logs are no longer needed.
 
 ## Configuration
 
@@ -55,7 +81,7 @@ Configure the plugin row in the profile patch:
 
 ```yaml
 - id: session-trash
-  name: dsh-session-trash
+  name: '@wangxiaocuo/dsh-session-trash'
   config:
     retentionDays: 30        # 1-3650
     sweepIntervalHours: 6    # 1-168
@@ -76,7 +102,7 @@ Defaults apply when `config` is omitted. Invalid values reject activation instea
 
 Right-click a cold session and choose "Move to trash". After the Toast disappears, open Settings, then Trash, and restore the session. If the original workspace directory is gone, the page asks for confirmation and restores the session as an orphan under "Ungrouped". To empty the trash at once, use "Delete all permanently" in the toolbar and confirm; entries that have not expired are deleted too.
 
-The current DSH version keeps a live agent for a session after it is opened, until the Host process exits. A session is still live even when idle, so the menu item stays hidden. Restart DSH before trashing it, or archive it instead. A second DSH instance does not detect a session that is live in another process, so do not use one to bypass this check.
+The current DSH version keeps a live agent for a session after it is opened, until the Host process exits. An idle session is still live, so the menu item stays hidden. Restart DSH before trashing it, or archive it. A second DSH instance does not detect a session that is live in another process, so do not use one to bypass this check.
 
 ## HTTP API
 
@@ -157,6 +183,7 @@ Project layout:
 
 ```text
 README.md / README.en.md   Chinese / English docs
+LICENSE              MIT license
 index.js              Host entry, Config, and service wiring
 client.js             Client UI, sidebar menu, and Toast
 lib/                  index, lock, moves, eligibility, cleanup, HTTP, and state
@@ -164,4 +191,4 @@ locale/               plugin display names and descriptions
 test/                 unit tests, Host smoke test, real dsh web e2e
 ```
 
-The trash icon uses the `trash-outline` artwork from the DeepSeek Harness product icon set, MIT licensed, © 2026 DeepSeek.
+The trash icon uses the `trash-outline` artwork from the DeepSeek Harness product icon set, MIT licensed, © 2026 DeepSeek. The project itself is MIT licensed; see [LICENSE](./LICENSE).

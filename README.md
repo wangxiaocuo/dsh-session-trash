@@ -2,50 +2,78 @@
 
 简体中文 | [English](./README.en.md)
 
-仓库：[GitHub](https://github.com/wangxiaocuo/dsh-session-trash)
+[GitHub](https://github.com/wangxiaocuo/dsh-session-trash) · [npm](https://www.npmjs.com/package/@wangxiaocuo/dsh-session-trash)
 
-DeepSeek Harness 的会话回收站插件。冷会话可以从侧边栏移出，日志保留在本地；在保留期内可以恢复，到期后自动删除日志。面向 DSH 0.2.2-rc.1 的 Desktop 和 Web，Host 和 Client 在同一个包里，不需要构建步骤。
+DeepSeek Harness 的会话回收站插件。冷会话可以从侧边栏移出，日志保留在本地；保留期内可以恢复，到期后自动删除日志。面向 DSH 0.2.2-rc.1 的 Desktop 和 Web，Host 和 Client 在同一个包里，不需要构建步骤。
 
-当前状态：功能已实现并通过回归测试。macOS 已完成真实 DSH Host 验证；Windows 和 Linux 的路径、锁、重试规则有单测覆盖，尚未在真实主机上验证。
+当前状态：功能已实现，回归测试通过。macOS 已在真实 DSH Host 上验证；Windows 和 Linux 的路径、锁、重试规则有单测覆盖，尚未在真实主机上运行。
 
 ## 功能
 
-- 在侧边栏右键会话，选择「移入回收站」。只有冷会话、没有持久化子会话、也没有运行中的 turn、job、subagent 或定时任务时，菜单项才会出现。
-- 移入后显示 DSH 共享 Toast，只带一个「撤销」动作。撤销会先尝试正常恢复，原工作区不存在时自动改为孤儿恢复。
-- 设置页「回收站」显示标题、Session ID、原工作区、移入时间、剩余天数、大小和状态。列表支持搜索、筛选和每页 50 条的分页。
+- 侧边栏右键会话，选择「移入回收站」。只有冷会话、没有持久化子会话、也没有运行中的 turn、job、subagent 或定时任务时，菜单项才会出现。
+- 移入后显示 DSH 共享 Toast，只有「撤销」一个动作。撤销先尝试正常恢复，原工作区不存在时改为孤儿恢复。
+- 设置页「回收站」显示标题、Session ID、原工作区、移入时间、剩余天数、大小和状态。列表支持搜索、筛选，每页 50 条。
 - 行操作包括恢复、恢复为孤儿会话、永久删除、从索引移除、复制 Session ID，以及在 Finder 或资源管理器中显示原工作区。
-- 工具栏的「永久删除全部」在二次确认后一次清空回收站：删除所有已移入的会话日志，并把文件缺失的记录从索引移除；附件、图片和搜索索引等衍生物不会被删除。
-- 回收站默认保留 30 天，每 6 小时自动扫描一次。插件激活后和打开回收站页面时也会检查。清理失败会按指数退避重试，失败信息显示在页面上。
-- 索引写入是原子的，旧索引保留为 `.bak`。索引和备份都损坏时进入保护模式，拒绝写操作，并可从每个回收站对象的 `meta.json` 重建。
-- 重命名、分叉、归档、复制 Session ID 继续使用 DSH 自带的侧边栏菜单，本插件不重复实现。
+- 工具栏「永久删除全部」在二次确认后清空回收站：删除所有已移入的会话日志，并把文件缺失的记录移出索引；附件、图片和搜索索引等衍生物不删除。
+- 默认保留 30 天，每 6 小时扫描一次；插件激活后和打开回收站页面时也会检查。清理失败按指数退避重试，失败信息显示在页面上。
+- 索引原子写入，旧索引保留为 `.bak`。索引和备份都损坏时进入保护模式，拒绝写操作，并可从每个对象的 `meta.json` 重建。
+- 重命名、分叉、归档和复制 Session ID 继续使用 DSH 自带的侧边栏菜单，本插件不重复实现。
 
 ## 安装
 
-从 GitHub 克隆仓库：
+插件发布在 npm（[`@wangxiaocuo/dsh-session-trash`](https://www.npmjs.com/package/@wangxiaocuo/dsh-session-trash)），也可以在「添加插件」里填 GitHub 仓库地址或本地目录。
+
+安装和卸载由当前 profile 的 pnpm 完成。Desktop 自带 pnpm；从源码运行 `dsh web` 时要求 `PATH` 里有 pnpm，从 GitHub 安装还需要 git 和可用的 GitHub 网络。
+
+### 在 DSH 里安装（推荐）
+
+1. 打开侧栏「插件」页，点右上角「添加插件」。
+2. 在「包名或地址」里填 `@wangxiaocuo/dsh-session-trash`。要装当前分支最新代码时，改填 `git+https://github.com/wangxiaocuo/dsh-session-trash.git`。
+3. 「安装源」保持默认。插件和依赖都从 npm 下载；国内网络可以切到「中国大陆镜像源」，镜像同步可能比官方源晚几分钟。
+4. 点「安装」。DSH 先读取包名、简介和版本，再用 pnpm 安装；命令和输出在「查看安装详情」里。
+5. 装好后点「立即启用」。提示需要重启时重启 DSH，Web 端刷新页面。右键菜单和设置页「回收站」随后出现。
+
+本地目录安装：先克隆仓库，在目录里执行 `pnpm install`（目录链接形式的 bundle 使用自己的 `node_modules`），再填该目录的绝对路径。
+
+安装失败时先看「查看安装详情」里的 pnpm 输出和 Host 日志路径：
+
+- 未找到相关插件：检查包名拼写，或等镜像同步；也可以改用 Git 地址或本地目录。
+- 所有安装源都无法连接：检查网络或代理，或改用本地目录。
+- 包没有声明组合包，或路径不是有效的插件包：Git 地址要指向仓库根目录，本地路径要填插件包目录。
+- 安装完成但功能没有出现：确认已在插件页启用；未开启 HMR 的 profile 需要重启 DSH，Web 端还要刷新页面。
+
+### 让 Agent 安装
+
+让 Agent 执行其中一条。这个操作需要 `danger-full-access` 或单独批准：
+
+```text
+plugin_manager install_bundle  target=@wangxiaocuo/dsh-session-trash
+plugin_manager install_bundle  target=git+https://github.com/wangxiaocuo/dsh-session-trash.git
+plugin_manager install_bundle  target=/absolute/path/to/dsh-session-trash
+```
+
+本机已有克隆目录时直接装目录，可以省一次下载。装有 DSH CLI 的话，`dsh plugin add <同样的 spec>` 等价。
+
+### 手动链接到 profile（开发用）
 
 ```bash
 git clone https://github.com/wangxiaocuo/dsh-session-trash.git
 cd dsh-session-trash
+pnpm install
 ```
-
-目录链接形式的 bundle 会使用自己的 `node_modules`，安装前先在包目录运行 `pnpm install`。然后在 DSH 的 `plugin_manager` 中安装当前目录：
-
-```text
-plugin_manager install_bundle  target=<absolute path to this directory>
-```
-
-本地开发也可以把包链接到 profile：
 
 ```bash
 cd "${DSH_HOME:-$HOME/.dsh}/profiles/desktop"
 pnpm add link:/absolute/path/to/dsh-session-trash
 ```
 
-然后把 `dsh-session-trash` 加入该 profile `package.json` 的 `dsh.profile.bundles`。重启 Desktop 后加载 Host，刷新页面后加载 Client。
+把 `@wangxiaocuo/dsh-session-trash` 加入该 profile `package.json` 的 `dsh.profile.bundles`，重启 DSH 加载 Host，刷新页面加载 Client。运行时依赖 `@deepseek-ai/dsh-home-paths@0.2.2-rc.1` 和 `@deepseek-ai/schemastery@3.19.0`。
 
-运行时依赖 `@deepseek-ai/dsh-home-paths@0.2.2-rc.1` 和 `@deepseek-ai/schemastery@3.19.0`。
+### 升级和卸载
 
-卸载时从 profile 的 bundles 和依赖中移除 `dsh-session-trash`，然后重启 Desktop。卸载不会删除 `<DSH_HOME>/.session-trash`，需要清理时手动删除该目录。
+npm 安装的插件在「插件」页打开「会话回收站」的详情，展开「版本」区块后点「更新」；没有可更新的版本时卸载后重装。Git 安装需要卸载重装才会取到新代码；手动链接的在目录里 `git pull`、`pnpm install`，然后重启 DSH 并刷新页面。
+
+卸载时打开同一个详情，点「卸载」并确认，profile 里的依赖会一并移除；也可以手动从 profile 的 bundles 和依赖中移除后重启。卸载不会删除 `<DSH_HOME>/.session-trash`，需要清理时手动删除该目录。
 
 ## 配置
 
@@ -53,7 +81,7 @@ pnpm add link:/absolute/path/to/dsh-session-trash
 
 ```yaml
 - id: session-trash
-  name: dsh-session-trash
+  name: '@wangxiaocuo/dsh-session-trash'
   config:
     retentionDays: 30        # 1-3650
     sweepIntervalHours: 6    # 1-168
@@ -72,13 +100,13 @@ pnpm add link:/absolute/path/to/dsh-session-trash
 
 ## 使用
 
-右键冷会话选择「移入回收站」。Toast 消失后，仍可从设置页的「回收站」恢复。恢复时如果原工作区目录已不存在，页面会先弹出确认，确认后会话回到「未分组」。需要一次清空时，点工具栏的「永久删除全部」并确认；未过期的条目也会一并删除。
+右键冷会话选择「移入回收站」。Toast 消失后，仍可从设置页「回收站」恢复；原工作区目录已不存在时，页面会先确认，确认后会话回到「未分组」。需要清空时点工具栏「永久删除全部」并确认，未过期的条目也会删除。
 
-当前 DSH 版本会把打开过的会话保留为 live agent，直到该 Host 进程结束。即使它已经空闲，菜单项也不会出现；需要回收时先重启 DSH，或者直接归档。另一个 DSH 实例不会识别这种 live 状态，不要用它绕过限制。
+当前 DSH 版本会把打开过的会话保留为 live agent，直到该 Host 进程结束。会话即使空闲也算 live，菜单项不会出现；需要回收时先重启 DSH，或直接归档。另一个 DSH 实例不会识别这种 live 状态，不要用它绕过限制。
 
 ## HTTP API
 
-所有路由位于 `/plugins/dsh-session-trash/api/`，以精确路径（exact route）注册在 `ctx.webServer` 上。
+所有路由位于 `/plugins/dsh-session-trash/api/`，以精确路径注册在 `ctx.webServer` 上。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -93,7 +121,7 @@ pnpm add link:/absolute/path/to/dsh-session-trash
 | `POST` | `/cleanup` | 无请求体，手动执行一次清理 |
 | `POST` | `/rebuild` | 无请求体，仅在索引保护模式下重建 |
 
-请求需要通过 `ctx.connection.requestRejection()` 和 `ctx.connection.admit()`，`POST` 还要带 `X-DSH-Session-Trash: 1`。读取请求体时使用 `Content-Type: application/json`，上限 64 KiB。响应带 `Cache-Control: no-store`，不会返回回收站根目录的绝对路径。
+请求需要通过 `ctx.connection.requestRejection()` 和 `ctx.connection.admit()`，`POST` 还要带 `X-DSH-Session-Trash: 1`。请求体使用 `Content-Type: application/json`，上限 64 KiB。响应带 `Cache-Control: no-store`，不返回回收站根目录的绝对路径。
 
 失败响应格式为 `{ ok: false, error: { code, message, details? } }`。预检拒绝码包括 `SESSION_NOT_FOUND`、`ALREADY_TRASHED`、`SESSION_NOT_MATERIALIZED`、`STORAGE_UNSUPPORTED`、`SESSION_SUBAGENT`、`SESSION_HAS_DESCENDANTS`、`SESSION_LINEAGE_UNRESOLVED`、`SESSION_LIVE`、`SESSION_ACTIVE`、`UNSAFE_SESSION_DIR`、`INDEX_CORRUPT` 和 `IO_ERROR`。
 
@@ -155,6 +183,7 @@ DSH_HOME=$(mktemp -d) ELECTRON_RUN_AS_NODE=1 \
 
 ```text
 README.md / README.en.md   中文 / English 文档
+LICENSE               MIT 许可证
 index.js              Host 入口、Config 和服务装配
 client.js             Client 界面、侧边栏菜单和 Toast
 lib/                  索引、锁、移动、资格判断、清理、HTTP 和状态投影
@@ -162,4 +191,4 @@ locale/               插件显示名称和描述
 test/                 单测、Host 冒烟测试、真实 dsh web 端到端测试
 ```
 
-回收站图标使用 DeepSeek Harness 产品图标集中的 `trash-outline` 图形，MIT 许可，© 2026 DeepSeek。
+回收站图标使用 DeepSeek Harness 产品图标集中的 `trash-outline` 图形，MIT 许可，© 2026 DeepSeek。项目整体为 MIT 许可，见 [LICENSE](./LICENSE)。

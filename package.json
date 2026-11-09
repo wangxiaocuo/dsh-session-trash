@@ -1,9 +1,30 @@
 {
-  "name": "dsh-session-trash",
-  "version": "0.5.0",
-  "private": true,
+  "name": "@wangxiaocuo/dsh-session-trash",
+  "version": "0.5.1",
+  "description": "DeepSeek Harness plugin: move cold sessions into a recoverable trash, restore them within the retention window, or delete their logs permanently.",
+  "license": "MIT",
+  "author": "wangxiaocuo",
+  "homepage": "https://github.com/wangxiaocuo/dsh-session-trash#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wangxiaocuo/dsh-session-trash.git"
+  },
+  "bugs": {
+    "url": "https://github.com/wangxiaocuo/dsh-session-trash/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek",
+    "deepseek-harness",
+    "dsh-plugin",
+    "session",
+    "trash",
+    "recycle-bin"
+  ],
   "type": "module",
-  "description": "Move cold sessions into a recoverable trash, then restore or permanently delete them before the retention window expires.",
+  "engines": {
+    "dsh": "^0.2.2-rc.1"
+  },
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
@@ -42,5 +63,8 @@
         "@deepseek-ai/dsh-client-ui-workspace"
       ]
     }
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
