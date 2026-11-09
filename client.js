@@ -129,6 +129,14 @@ window.__ModuleLoader__.load({
       purgeTitle: '永久删除「{title}」的会话日志？',
       purgeBody: '此操作不可撤销。附件、图片和搜索索引等衍生物不会被删除。',
       purgeConfirm: '永久删除',
+      purgeAll: '永久删除全部',
+      purgingAll: '正在删除…',
+      purgeAllTitle: '永久删除回收站中的全部 {count} 个会话？',
+      purgeAllBody: '此操作不可撤销。附件、图片和搜索索引等衍生物不会被删除。',
+      purgeAllConfirm: '全部永久删除',
+      purgeAllDone: '已永久删除 {count} 个会话',
+      purgeAllNone: '回收站中没有可删除的会话',
+      purgeAllPartial: '已永久删除 {removed} 个会话，{failed} 个未能删除',
       forgetTitle: '从回收站列表移除这条缺失记录？',
       forgetBody: '不会删除任何文件；仅移除索引中的这条记录。',
       forgetConfirm: '从索引移除',
@@ -250,6 +258,14 @@ window.__ModuleLoader__.load({
       purgeTitle: 'Permanently delete the session log for “{title}”?',
       purgeBody: 'This cannot be undone. Attachments, images, and search index rows are not deleted.',
       purgeConfirm: 'Delete permanently',
+      purgeAll: 'Delete all permanently',
+      purgingAll: 'Deleting…',
+      purgeAllTitle: 'Permanently delete all {count} sessions in the trash?',
+      purgeAllBody: 'This cannot be undone. Attachments, images, and search index rows are not deleted.',
+      purgeAllConfirm: 'Delete all permanently',
+      purgeAllDone: 'Permanently deleted {count} sessions',
+      purgeAllNone: 'No sessions to delete',
+      purgeAllPartial: 'Permanently deleted {removed} sessions; {failed} could not be deleted',
       forgetTitle: 'Remove this missing record from the trash list?',
       forgetBody: 'No file is deleted; only this index record is removed.',
       forgetConfirm: 'Remove from index',
@@ -906,15 +922,16 @@ window.__ModuleLoader__.load({
      * Modal confirmation with a focus trap and focus restoration.
      *
      * @param {{
-     *   kind: 'orphan' | 'purge' | 'forget',
-     *   entry: object,
+     *   kind: 'orphan' | 'purge' | 'forget' | 'purgeAll',
+     *   entry?: object,
+     *   count?: number,
      *   t: (key: string) => string,
      *   onCancel: () => void,
      *   onConfirm: () => void,
      * }} props dialog content and handlers.
      * @returns {import('react').ReactElement} the dialog overlay.
      */
-    function ConfirmDialog({ kind, entry, t, onCancel, onConfirm }) {
+    function ConfirmDialog({ kind, entry, count, t, onCancel, onConfirm }) {
       const dialogRef = React.useRef(null)
       const cancelRef = React.useRef(null)
       const titleId = `dsh-trash-dialog-title-${kind}`
@@ -952,7 +969,8 @@ window.__ModuleLoader__.load({
         }
       }, [onCancel])
 
-      const title = entry.title !== undefined && entry.title !== '' ? entry.title : entry.sessionId
+      const title =
+        entry !== undefined && entry.title !== undefined && entry.title !== '' ? entry.title : (entry?.sessionId ?? '')
       let heading = ''
       let body = ''
       let confirmLabel = ''
@@ -964,6 +982,10 @@ window.__ModuleLoader__.load({
         heading = format(t('purgeTitle'), { title })
         body = t('purgeBody')
         confirmLabel = t('purgeConfirm')
+      } else if (kind === 'purgeAll') {
+        heading = format(t('purgeAllTitle'), { count })
+        body = t('purgeAllBody')
+        confirmLabel = t('purgeAllConfirm')
       } else {
         heading = t('forgetTitle')
         body = t('forgetBody')
@@ -998,7 +1020,9 @@ window.__ModuleLoader__.load({
               'button',
               {
                 type: 'button',
-                className: `dsh-trash__button${kind === 'purge' ? ' dsh-trash__button--danger' : ''}`,
+                className: `dsh-trash__button${
+                  kind === 'purge' || kind === 'purgeAll' ? ' dsh-trash__button--danger' : ''
+                }`,
                 onClick: onConfirm,
               },
               confirmLabel,
@@ -1023,6 +1047,7 @@ window.__ModuleLoader__.load({
         const [dialog, setDialog] = React.useState(null)
         const [cleaning, setCleaning] = React.useState(false)
         const [rebuilding, setRebuilding] = React.useState(false)
+        const [purgingAll, setPurgingAll] = React.useState(false)
         const [announcement, setAnnouncement] = React.useState('')
         const [query, setQuery] = React.useState('')
         const [filter, setFilter] = React.useState('all')
@@ -1354,6 +1379,40 @@ window.__ModuleLoader__.load({
         }
 
         /**
+         * Permanently delete every entry in the trash.
+         *
+         * @returns {Promise<void>} completion of the operation.
+         */
+        async function performPurgeAll() {
+          setPurgingAll(true)
+          try {
+            const { status, ok, payload } = await requestJson('purge-all', { method: 'POST' })
+            if (!ok) {
+              ctx.contextMenus.notify(describeActionFailure(status, payload, t), false)
+              return
+            }
+            const purged = payload !== null && payload !== undefined && typeof payload.purged === 'number' ? payload.purged : 0
+            const forgotten =
+              payload !== null && payload !== undefined && typeof payload.forgotten === 'number' ? payload.forgotten : 0
+            const failed = payload !== null && payload !== undefined && typeof payload.failed === 'number' ? payload.failed : 0
+            const removed = purged + forgotten
+            const message =
+              failed > 0
+                ? format(t('purgeAllPartial'), { removed, failed })
+                : removed > 0
+                  ? format(t('purgeAllDone'), { count: removed })
+                  : t('purgeAllNone')
+            bumpRevision()
+            ctx.contextMenus.notify(message, failed === 0)
+            announce(message)
+          } catch {
+            ctx.contextMenus.notify(t('errorNetwork'), false)
+          } finally {
+            setPurgingAll(false)
+          }
+        }
+
+        /**
          * @returns {Promise<void>} completion of the operation.
          */
         async function runRebuild() {
@@ -1636,6 +1695,16 @@ window.__ModuleLoader__.load({
                     },
                     t('refresh'),
                   ),
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'dsh-trash__button dsh-trash__button--danger',
+                      onClick: () => setDialog({ kind: 'purgeAll', count: entries.length }),
+                      disabled: busy || cleaning || purgingAll || corrupt || entries.length === 0,
+                    },
+                    purgingAll ? t('purgingAll') : t('purgeAll'),
+                  ),
                 ),
               )
 
@@ -1812,7 +1881,7 @@ window.__ModuleLoader__.load({
                           type: 'button',
                           className: 'dsh-trash__button',
                           'aria-label': format(t('actionRestoreFor'), { title }),
-                          disabled: rowBusy || busy,
+                          disabled: rowBusy || busy || purgingAll,
                           onClick: () => {
                             if (entry.requiresOrphanRestore === true) setDialog({ kind: 'orphan', entry })
                             else void performRestore(entry, 'normal')
@@ -1824,7 +1893,7 @@ window.__ModuleLoader__.load({
                   h(ActionMenu, {
                     label: format(t('actionMoreFor'), { title }),
                     items: menuItemsFor(entry),
-                    disabled: rowBusy || busy,
+                    disabled: rowBusy || busy || purgingAll,
                   }),
                 ),
               )
@@ -1895,6 +1964,7 @@ window.__ModuleLoader__.load({
             : h(ConfirmDialog, {
                 kind: dialog.kind,
                 entry: dialog.entry,
+                count: dialog.count,
                 t,
                 onCancel: closeDialog,
                 onConfirm: () => {
@@ -1902,6 +1972,7 @@ window.__ModuleLoader__.load({
                   setDialog(null)
                   if (current.kind === 'orphan') void performRestore(current.entry, 'orphan')
                   else if (current.kind === 'purge') void performPurge(current.entry)
+                  else if (current.kind === 'purgeAll') void performPurgeAll()
                   else void performForget(current.entry)
                 },
               })

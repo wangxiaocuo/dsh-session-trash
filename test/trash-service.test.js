@@ -459,3 +459,113 @@ test('preflight conservatively refuses when lineage cannot be resolved', async (
   assert.equal(harness.store.entries().length, 0)
   await harness.dispose()
 })
+
+test('purge all deletes every trashed session and forgets missing entries', async () => {
+  const harness = await createHarness()
+  const project = path.join(harness.root, 'project')
+  await fs.mkdir(project)
+  await harness.addSession({ id: 'session-a', cwd: project, title: 'A' })
+  await harness.addSession({ id: 'session-b', cwd: project, title: 'B' })
+  await harness.addSession({ id: 'session-c', cwd: project, title: 'C' })
+  const untouched = await harness.addSession({ id: 'session-d', cwd: project, title: 'D' })
+  const trashedA = await harness.service.trash('session-a')
+  const trashedB = await harness.service.trash('session-b')
+  const missing = await harness.service.trash('session-c')
+  await fs.rm(path.join(harness.trashRoot, 'objects', missing.trashId), { recursive: true, force: true })
+  await harness.service.recover()
+  assert.equal(harness.store.findEntry('session-c')?.state, 'missing')
+
+  const result = await harness.service.purgeAll()
+  assert.equal(result.purged, 2)
+  assert.equal(result.forgotten, 1)
+  assert.equal(result.failed, 0)
+  assert.deepEqual(result.failures, [])
+  assert.ok(result.changed > 0)
+  assert.deepEqual(await fs.readdir(harness.store.objectsDir), [])
+  assert.deepEqual(harness.store.entries(), [])
+  for (const trashId of [trashedA.trashId, trashedB.trashId]) {
+    await assert.rejects(fs.stat(path.join(harness.trashRoot, 'objects', trashId)))
+  }
+  assert.equal((await fs.stat(untouched.dir)).isDirectory(), true)
+  assert.ok(
+    harness.logger.lines.some(
+      (line) => line.level === 'info' && String(line.args[0]).includes('purged 2, forgotten 1, failed 0'),
+    ),
+  )
+  await harness.dispose()
+})
+
+test('purge all on an empty trash returns zero counts', async () => {
+  const harness = await createHarness()
+  const result = await harness.service.purgeAll()
+  assert.deepEqual(result, { purged: 0, forgotten: 0, failed: 0, failures: [], changed: 0 })
+  assert.deepEqual(await fs.readdir(harness.store.objectsDir), [])
+  assert.deepEqual(harness.store.entries(), [])
+  await harness.dispose()
+})
+
+test('purge all refuses protection mode before touching the trash', async () => {
+  const harness = await createHarness()
+  const project = path.join(harness.root, 'project')
+  await fs.mkdir(project)
+  await harness.addSession({ id: 'session-a', cwd: project, title: 'A' })
+  const entry = await harness.service.trash('session-a')
+  const indexPath = path.join(harness.trashRoot, 'trash-index.json')
+  await fs.writeFile(indexPath, '{ broken')
+  await fs.writeFile(`${indexPath}.bak`, '{ also broken')
+  await harness.store.init()
+  assert.equal(harness.store.isProtected(), true)
+
+  await assert.rejects(harness.service.purgeAll(), trashCode('INDEX_CORRUPT'))
+  assert.equal((await fs.stat(harness.store.sessionPath(entry.trashId))).isDirectory(), true)
+  assert.equal(await fs.readFile(indexPath, 'utf8'), '{ broken')
+  assert.deepEqual(harness.store.entries(), [])
+  await harness.dispose()
+})
+
+test('purge all isolates one failure and removes the rest on the next run', async () => {
+  const harness = await createHarness()
+  const project = path.join(harness.root, 'project')
+  await fs.mkdir(project)
+  await harness.addSession({ id: 'session-a', cwd: project, title: 'A' })
+  await harness.addSession({ id: 'session-b', cwd: project, title: 'B' })
+  const trashedA = await harness.service.trash('session-a')
+  const trashedB = await harness.service.trash('session-b')
+
+  const original = harness.store.removeObjectDir.bind(harness.store)
+  let calls = 0
+  harness.store.removeObjectDir = async (trashId) => {
+    calls += 1
+    if (calls === 1) throw new Error('disk is busy')
+    return original(trashId)
+  }
+  let first
+  try {
+    first = await harness.service.purgeAll()
+  } finally {
+    harness.store.removeObjectDir = original
+  }
+  assert.equal(first.purged, 1)
+  assert.equal(first.forgotten, 0)
+  assert.equal(first.failed, 1)
+  assert.equal(first.failures.length, 1)
+  assert.equal(first.failures[0].sessionId, 'session-a')
+  assert.equal(first.failures[0].title, 'A')
+  assert.ok(typeof first.failures[0].message === 'string' && first.failures[0].message !== '')
+  const failedEntry = harness.store.findEntry('session-a')
+  assert.notEqual(failedEntry, undefined)
+  assert.equal(failedEntry.state, 'purging')
+  assert.match(failedEntry.lastError, /disk is busy/)
+  assert.equal((await fs.stat(harness.store.sessionPath(trashedA.trashId))).isDirectory(), true)
+  await assert.rejects(fs.stat(harness.store.sessionPath(trashedB.trashId)))
+
+  const second = await harness.service.purgeAll()
+  assert.equal(second.purged, 0)
+  assert.equal(second.forgotten, 0)
+  assert.equal(second.failed, 0)
+  assert.deepEqual(second.failures, [])
+  assert.ok(second.changed > 0)
+  assert.deepEqual(harness.store.entries(), [])
+  assert.deepEqual(await fs.readdir(harness.store.objectsDir), [])
+  await harness.dispose()
+})

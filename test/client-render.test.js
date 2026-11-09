@@ -278,6 +278,7 @@ function rowTitles(tree) {
 const STATE_ROUTE = '/plugins/dsh-session-trash/api/state'
 const RESTORE_ROUTE = '/plugins/dsh-session-trash/api/restore'
 const PURGE_ROUTE = '/plugins/dsh-session-trash/api/purge'
+const PURGE_ALL_ROUTE = '/plugins/dsh-session-trash/api/purge-all'
 const REBUILD_ROUTE = '/plugins/dsh-session-trash/api/rebuild'
 const CLEANUP_ROUTE = '/plugins/dsh-session-trash/api/cleanup'
 const REVEAL_ROUTE = '/plugins/dsh-session-trash/api/reveal'
@@ -596,6 +597,49 @@ test('purging from the row menu asks for confirmation before deleting', async ()
   assert.equal(client.toasts.at(-1).text, '已永久删除「Alpha」')
 })
 
+test('the delete-all toolbar button asks for confirmation before purging the trash', async () => {
+  const { factory, mini } = await loadModule()
+  const client = createClient(factory, mini, statePayload(), {
+    [PURGE_ALL_ROUTE]: { body: { ok: true, purged: 1, forgotten: 0, failed: 0 } },
+  })
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+  const purgeAll = buttonByText(tree, '永久删除全部')
+  assert.ok(purgeAll !== undefined)
+  purgeAll.props.onClick()
+  const afterClick = await mini.settle(section.component)
+  const dialog = dialogOfKind(afterClick, 'purgeAll')
+  assert.ok(dialog !== undefined)
+  assert.equal(dialog.props.count, 1)
+  assert.equal(client.calls.filter((entry) => entry.pathname === PURGE_ALL_ROUTE).length, 0)
+
+  dialog.props.onConfirm()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  const call = client.calls.find((entry) => entry.pathname === PURGE_ALL_ROUTE)
+  assert.ok(call !== undefined)
+  assert.equal(call.options.method, 'POST')
+  assert.equal(call.options.body, undefined)
+  assert.equal(client.toasts.at(-1).text, '已永久删除 1 个会话')
+  assert.equal(client.toasts.at(-1).success, true)
+})
+
+test('a partially failed delete-all reports both the removed and failed counts', async () => {
+  const { factory, mini } = await loadModule()
+  const client = createClient(factory, mini, statePayload(), {
+    [PURGE_ALL_ROUTE]: { status: 200, body: { ok: true, purged: 1, forgotten: 0, failed: 1 } },
+  })
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+  buttonByText(tree, '永久删除全部').props.onClick()
+  const afterClick = await mini.settle(section.component)
+  const dialog = dialogOfKind(afterClick, 'purgeAll')
+  assert.ok(dialog !== undefined)
+  dialog.props.onConfirm()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(client.toasts.at(-1).text, '已永久删除 1 个会话，1 个未能删除')
+  assert.equal(client.toasts.at(-1).success, false)
+})
+
 test('a corrupt index shows the recovery banner and rebuilds on demand', async () => {
   const { factory, mini } = await loadModule()
   const payload = statePayload()
@@ -628,6 +672,9 @@ test('the empty trash renders its guidance copy', async () => {
   assert.ok(text.includes('回收站为空'))
   assert.ok(text.includes('在侧边栏右键会话，选择「移入回收站」。'))
   assert.equal(inputByLabel(tree, '搜索回收站'), undefined)
+  const purgeAll = buttonByText(tree, '永久删除全部')
+  assert.ok(purgeAll !== undefined)
+  assert.equal(purgeAll.props.disabled, true)
 })
 
 test('a first-load failure shows only the error banner and retries into the list', async () => {

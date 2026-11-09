@@ -53,7 +53,7 @@ function createRequest({ method = 'POST', headers = {}, body = '' } = {}) {
 /**
  * Build one API instance over fakes.
  *
- * @param {{ rejection?: number, admission?: object, trash?: Function, restore?: Function, purge?: Function, forget?: Function, reveal?: Function, rebuild?: Function, state?: Function, cleanup?: Function, cleanupDiagnostics?: object }} [options] behaviour overrides.
+ * @param {{ rejection?: number, admission?: object, trash?: Function, restore?: Function, purge?: Function, purgeAll?: Function, forget?: Function, reveal?: Function, rebuild?: Function, state?: Function, cleanup?: Function, cleanupDiagnostics?: object }} [options] behaviour overrides.
  * @returns {{ call: Function, calls: unknown[], routes: Map<string, Function>, pageOpens: number[] }} the call helper and captured API pieces.
  */
 function createApi(options = {}) {
@@ -96,6 +96,11 @@ function createApi(options = {}) {
       calls.push(['purge', sessionId])
       if (options.purge !== undefined) return options.purge(sessionId)
       return { sessionId, title: 'A' }
+    },
+    async purgeAll() {
+      calls.push(['purgeAll'])
+      if (options.purgeAll !== undefined) return options.purgeAll()
+      return { purged: 2, forgotten: 1, failed: 0 }
     },
     async forget(sessionId) {
       calls.push(['forget', sessionId])
@@ -315,6 +320,39 @@ test('POST /purge and /forget forward the session identity', async () => {
   const missing = await call('purge', { headers: JSON_HEADERS, body: JSON.stringify({}) })
   assert.equal(missing.status, 400)
   assert.equal(missing.body.error.code, 'INVALID_REQUEST')
+})
+
+test('POST /purge-all returns the bulk counts without reading a body', async () => {
+  const { call, calls } = createApi()
+  const result = await call('purge-all', { headers: JSON_HEADERS })
+  assert.equal(result.status, 200)
+  assert.deepEqual(result.body, { ok: true, purged: 2, forgotten: 1, failed: 0 })
+  assert.deepEqual(calls, [['purgeAll']])
+
+  const empty = createApi({ purgeAll: () => ({}) })
+  const zeros = await empty.call('purge-all', { headers: JSON_HEADERS })
+  assert.equal(zeros.status, 200)
+  assert.deepEqual(zeros.body, { ok: true, purged: 0, forgotten: 0, failed: 0 })
+})
+
+test('POST /purge-all requires the CSRF header and never calls the service', async () => {
+  const { call, calls } = createApi()
+  const result = await call('purge-all', { headers: { host: '127.0.0.1:3080' } })
+  assert.equal(result.status, 403)
+  assert.equal(result.body.error.code, 'FORBIDDEN')
+  assert.deepEqual(calls, [])
+})
+
+test('POST /purge-all maps INDEX_CORRUPT to a server error', async () => {
+  const { call } = createApi({
+    purgeAll() {
+      throw new TrashError('INDEX_CORRUPT', 'The trash index is unreadable.')
+    },
+  })
+  const result = await call('purge-all', { headers: JSON_HEADERS })
+  assert.equal(result.status, 500)
+  assert.equal(result.body.ok, false)
+  assert.equal(result.body.error.code, 'INDEX_CORRUPT')
 })
 
 test('POST /reveal passes an abort signal and reports the opened state', async () => {

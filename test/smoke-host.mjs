@@ -79,7 +79,7 @@ ctx.provide('sessionController', {
 const plugin = await import(new URL('../index.js', import.meta.url).href)
 plugin.apply(ctx, plugin.Config({}))
 
-const expected = ['state', 'preflight', 'trash', 'restore', 'purge', 'forget', 'reveal', 'cleanup', 'rebuild'].map(
+const expected = ['state', 'preflight', 'trash', 'restore', 'purge', 'purge-all', 'forget', 'reveal', 'cleanup', 'rebuild'].map(
   (name) => `/plugins/dsh-session-trash/api/${name}`,
 )
 await new Promise((resolve) => setTimeout(resolve, 100))

@@ -11,6 +11,7 @@
  *   - trash + Toast-style undo + normal restore with Workspace order
  *   - reveal guards (unknown entry, missing workspace)
  *   - forget (missing-entry flow) and permanent purge
+ *   - bulk delete-all (every trashed log purged, missing index records forgotten)
  *   - cleanup failure diagnostics + manual recovery (automatic retry is unit-tested)
  *   - 30-day expiry purge
  *   - corrupt-index protection mode and rebuild from `meta.json`
@@ -380,6 +381,7 @@ const forgetProject = path.join(home, 'project-forget')
 const rebuildProject = path.join(home, 'project-rebuild')
 const cleanupProject = path.join(home, 'project-cleanup')
 const purgeProject = path.join(home, 'project-purge')
+const purgeAllProject = path.join(home, 'project-purge-all')
 const alphaId = 'session-e2e-alpha'
 const betaId = 'session-e2e-beta'
 const orderIds = ['session-e2e-order-a', 'session-e2e-order-b', 'session-e2e-order-c']
@@ -390,6 +392,7 @@ const forgetId = 'session-e2e-forget'
 const rebuildId = 'session-e2e-rebuild'
 const cleanupId = 'session-e2e-cleanup'
 const purgeId = 'session-e2e-purge'
+const bulkIds = ['session-e2e-bulk-a', 'session-e2e-bulk-b', 'session-e2e-bulk-missing']
 let server
 let failure = null
 
@@ -404,6 +407,7 @@ try {
     rebuildProject,
     cleanupProject,
     purgeProject,
+    purgeAllProject,
   ]) {
     await fs.mkdir(directory, { recursive: true })
   }
@@ -418,6 +422,7 @@ try {
   await writeSession(home, rebuildId, rebuildProject)
   await writeSession(home, cleanupId, cleanupProject)
   await writeSession(home, purgeId, purgeProject)
+  for (const id of bulkIds) await writeSession(home, id, purgeAllProject)
   await writeWorkspaces(home, [
     { id: 'ws-alpha', path: alphaProject, sessionIds: [alphaId] },
     { id: 'ws-beta', path: betaProject, sessionIds: [betaId] },
@@ -605,6 +610,37 @@ try {
   assert.equal(afterPurge.body.entries.some((entry) => entry.sessionId === purgeId), false)
   pass('permanent purge removes the object and index entry')
 
+  // --- Delete all permanently --------------------------------------------
+  const bulkEntries = []
+  for (const id of bulkIds.slice(0, 2)) {
+    const bulkTrashed = await api.call('trash', { method: 'POST', body: { sessionId: id } })
+    assert.equal(bulkTrashed.status, 200)
+    bulkEntries.push(await findEntry(home, id))
+  }
+  const missingBulkTrashed = await api.call('trash', { method: 'POST', body: { sessionId: bulkIds[2] } })
+  assert.equal(missingBulkTrashed.status, 200)
+  const missingBulkEntry = await findEntry(home, bulkIds[2])
+  await fs.rm(path.join(home, '.session-trash', 'objects', missingBulkEntry.trashId), {
+    recursive: true,
+    force: true,
+  })
+  const markMissing = await api.call('cleanup', { method: 'POST' })
+  assert.equal(markMissing.status, 200)
+  const beforeBulk = await api.call('state')
+  assert.equal(beforeBulk.body.entries.find((entry) => entry.sessionId === bulkIds[2]).state, 'missing')
+  const bulkPurged = await api.call('purge-all', { method: 'POST' })
+  assert.equal(bulkPurged.status, 200)
+  assert.deepEqual(bulkPurged.body, { ok: true, purged: 2, forgotten: 1, failed: 0 })
+  for (const entry of bulkEntries) {
+    await assert.rejects(fs.stat(path.join(home, '.session-trash', 'objects', entry.trashId)))
+  }
+  const emptiedState = await api.call('state')
+  assert.equal(emptiedState.body.entries.length, 0)
+  const emptyBulkPurge = await api.call('purge-all', { method: 'POST' })
+  assert.equal(emptyBulkPurge.status, 200)
+  assert.deepEqual(emptyBulkPurge.body, { ok: true, purged: 0, forgotten: 0, failed: 0 })
+  pass('delete-all permanently empties the trash and forgets missing entries')
+
   // --- 30-day expiry ------------------------------------------------------
   const alphaTrashed = await api.call('trash', { method: 'POST', body: { sessionId: alphaId } })
   assert.equal(alphaTrashed.status, 200)
@@ -681,7 +717,7 @@ try {
   assert.equal((await fs.stat(path.join(home, 'sessions', projectName(orderProject), orderIds[1]))).isDirectory(), true)
   pass('final index/object invariants')
 
-  console.log('e2e-web regression passed: 13 feature groups')
+  console.log('e2e-web regression passed: 14 feature groups')
 } catch (error) {
   failure = error
   console.error(`e2e-web regression failed: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`)

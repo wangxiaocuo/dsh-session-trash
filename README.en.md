@@ -16,6 +16,7 @@ Status: feature complete and covered by the regression suite. macOS has been ver
 - After the move, the shared DSH Toast offers one action: Undo. Undo tries a normal restore first and falls back to an orphan restore when the original workspace is gone.
 - The Trash page in Settings shows title, Session ID, original workspace, trashed date, remaining days, size, and status. The list supports search, filters, and paging at 50 rows per page.
 - Row actions include restore, restore as orphan, permanent deletion, removal from the index, copying the Session ID, and revealing the original workspace in Finder or Explorer.
+- The toolbar's "Delete all permanently" empties the whole trash after one confirmation: it deletes every trashed session log and drops file-missing records from the index. Attachments, images, and search-index rows are not deleted.
 - Cleanup keeps entries for 30 days by default and runs every 6 hours. It also runs shortly after activation and when the Trash page opens. Failed cleanup runs are retried with exponential backoff, and the page shows the failure.
 - The index is committed atomically and the previous index is kept as `.bak`. If both the index and the backup are unreadable, the plugin enters protection mode and can rebuild the index from each object's `meta.json`.
 - Rename, fork, archive, and copy Session ID stay in the shipped DSH sidebar menu. This plugin does not reimplement them.
@@ -73,7 +74,7 @@ Defaults apply when `config` is omitted. Invalid values reject activation instea
 
 ## Usage
 
-Right-click a cold session and choose "Move to trash". After the Toast disappears, open Settings, then Trash, and restore the session. If the original workspace directory is gone, the page asks for confirmation and restores the session as an orphan under "Ungrouped".
+Right-click a cold session and choose "Move to trash". After the Toast disappears, open Settings, then Trash, and restore the session. If the original workspace directory is gone, the page asks for confirmation and restores the session as an orphan under "Ungrouped". To empty the trash at once, use "Delete all permanently" in the toolbar and confirm; entries that have not expired are deleted too.
 
 The current DSH version keeps a live agent for a session after it is opened, until the Host process exits. A session is still live even when idle, so the menu item stays hidden. Restart DSH before trashing it, or archive it instead. A second DSH instance does not detect a session that is live in another process, so do not use one to bypass this check.
 
@@ -88,6 +89,7 @@ All routes live under `/plugins/dsh-session-trash/api/` and are registered as ex
 | `POST` | `/trash` | `{ sessionId }`; moves the session directory |
 | `POST` | `/restore` | `{ sessionId, mode: 'normal' \| 'orphan' }` |
 | `POST` | `/purge` | `{ sessionId }`; permanently deletes the session log |
+| `POST` | `/purge-all` | No body; permanently deletes every entry in the trash, dropping `missing` index records only; returns `{ ok, purged, forgotten, failed }` |
 | `POST` | `/forget` | `{ sessionId }`; removes only a `missing` index entry |
 | `POST` | `/reveal` | `{ sessionId }`; opens the original workspace |
 | `POST` | `/cleanup` | No body; runs one cleanup sweep |
