@@ -16,7 +16,7 @@ test('init creates the private layout and an empty index', async () => {
   assert.ok(entries.includes('trash-index.json'))
   assert.ok(entries.includes('objects'))
   const index = JSON.parse(await fs.readFile(path.join(trashRoot, 'trash-index.json'), 'utf8'))
-  assert.equal(index.version, 1)
+  assert.equal(index.version, 2)
   assert.deepEqual(index.entries, [])
   if (process.platform !== 'win32') {
     const stats = await fs.stat(trashRoot)
@@ -110,7 +110,7 @@ test('a stale lock is taken over and a live lock is refused', async () => {
 
 test('emptyIndex is versioned and empty', () => {
   const now = Date.now()
-  assert.deepEqual(emptyIndex(now), { version: 1, updatedAt: now, entries: [] })
+  assert.deepEqual(emptyIndex(now), { version: 2, updatedAt: now, entries: [] })
 })
 
 test('a failed index write keeps the previous commit and removes the temporary file', async (t) => {
@@ -135,5 +135,51 @@ test('a failed index write keeps the previous commit and removes the temporary f
   const reopened = new TrashStore({ root: trashRoot, logger: createLogger() })
   await reopened.init()
   assert.equal(reopened.entries().length, 1)
+  await fs.rm(root, { recursive: true, force: true })
+})
+
+test('a version 1 index is upgraded to version 2 with one parent member', async () => {
+  const root = await createTempDir()
+  const trashRoot = path.join(root, '.session-trash')
+  await fs.mkdir(path.join(trashRoot, 'objects'), { recursive: true })
+  const project = path.join(root, 'project')
+  const sessionDir = path.join(project, 'session-a')
+  await fs.mkdir(sessionDir, { recursive: true })
+  const logPath = path.join(sessionDir, 'session.v4.jsonl')
+  await fs.writeFile(logPath, '{"type":"session/start"}\n')
+  const now = Date.now()
+  const legacy = {
+    version: 1,
+    updatedAt: now,
+    entries: [
+      {
+        sessionId: 'session-a',
+        trashId: '20260101T000000-aaaaaaaa',
+        state: 'trashed',
+        title: 'A',
+        trashedAt: now,
+        startedAt: now,
+        originalCwd: project,
+        originalSessionDir: sessionDir,
+        originalLogPath: logPath,
+        persistenceProjectDirHint: project,
+        sizeBytes: 25,
+        fileCount: 1,
+      },
+    ],
+  }
+  await fs.writeFile(path.join(trashRoot, 'trash-index.json'), JSON.stringify(legacy))
+  const store = new TrashStore({ root: trashRoot, logger: createLogger() })
+  await store.init()
+  const upgraded = JSON.parse(await fs.readFile(path.join(trashRoot, 'trash-index.json'), 'utf8'))
+  assert.equal(upgraded.version, 2)
+  assert.equal(upgraded.entries.length, 1)
+  assert.equal(upgraded.entries[0].members.length, 1)
+  assert.equal(upgraded.entries[0].members[0].sessionId, 'session-a')
+  assert.equal(upgraded.entries[0].members[0].originalSessionDir, sessionDir)
+  assert.equal(upgraded.entries[0].members[0].originalLogPath, logPath)
+  const backup = JSON.parse(await fs.readFile(path.join(trashRoot, 'trash-index.json.bak'), 'utf8'))
+  assert.equal(backup.version, 1)
+  assert.equal(store.findEntry('session-a')?.state, 'trashed')
   await fs.rm(root, { recursive: true, force: true })
 })

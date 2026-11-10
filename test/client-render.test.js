@@ -276,6 +276,8 @@ function rowTitles(tree) {
 }
 
 const STATE_ROUTE = '/plugins/dsh-session-trash/api/state'
+const PREFLIGHT_ROUTE = '/plugins/dsh-session-trash/api/preflight'
+const TRASH_ROUTE = '/plugins/dsh-session-trash/api/trash'
 const RESTORE_ROUTE = '/plugins/dsh-session-trash/api/restore'
 const PURGE_ROUTE = '/plugins/dsh-session-trash/api/purge'
 const PURGE_ALL_ROUTE = '/plugins/dsh-session-trash/api/purge-all'
@@ -309,6 +311,8 @@ function makeEntry(overrides = {}) {
     canForget: false,
     requiresOrphanRestore: false,
     lastError: null,
+    subagentCount: 0,
+    members: [{ sessionId: 'session-x', origin: null, sizeBytes: 1024 }],
     ...overrides,
   }
 }
@@ -357,6 +361,8 @@ function statePayload(overrides = {}) {
         canForget: false,
         requiresOrphanRestore: false,
         lastError: null,
+        subagentCount: 0,
+        members: [{ sessionId: 'session-alpha', origin: null, sizeBytes: 2048 }],
         ...overrides,
       },
     ],
@@ -405,11 +411,12 @@ async function loadModule() {
  * @param {object} mini mini React runtime.
  * @param {object} payload `/state` answer.
  * @param {Record<string, object | Function>} [extra] additional endpoint answers.
- * @returns {{ ctx: object, calls: object[], render: Function, toasts: object[] }} the client harness.
+ * @returns {{ ctx: object, calls: object[], menus: object[], slots: object[], toasts: object[] }} the client harness.
  */
 function createClient(factory, mini, payload, extra = {}) {
   const dictionaries = {}
   const slots = []
+  const menus = []
   const toasts = []
   const calls = []
   globalThis.fetch = async (url, options = {}) => {
@@ -462,7 +469,8 @@ function createClient(factory, mini, payload, extra = {}) {
       },
     },
     contextMenus: {
-      register() {
+      register(definition) {
+        menus.push(definition)
         return () => {}
       },
       notify(text, success, action) {
@@ -475,7 +483,7 @@ function createClient(factory, mini, payload, extra = {}) {
     throw new Error(`unexpected module ${name}`)
   })
   module.apply(ctx)
-  return { ctx, calls, slots, toasts }
+  return { ctx, calls, menus, slots, toasts }
 }
 
 test('the trash page renders rows, badges, and row actions from /state', async () => {
@@ -497,6 +505,68 @@ test('the trash page renders rows, badges, and row actions from /state', async (
   assert.deepEqual(labels, ['恢复为孤儿会话', '在 Finder 中显示', '复制 Session ID', '永久删除'])
   assert.equal(menus[0].props.items.at(-1).danger, true)
   assert.equal(menus[0].props.label, '「Alpha」的更多操作')
+})
+
+test('a row shows a sub-session count badge only when the entry has hidden sub-sessions', async () => {
+  const { factory, mini } = await loadModule()
+  const payload = statePayloadWith([
+    makeEntry({
+      sessionId: 'session-parent',
+      title: 'Parent',
+      sizeBytes: 7168,
+      subagentCount: 3,
+      members: [
+        { sessionId: 'session-parent', origin: null, sizeBytes: 4096 },
+        { sessionId: 'session-parent-child-1', origin: 'subagent', sizeBytes: 1024 },
+        { sessionId: 'session-parent-child-2', origin: 'subagent', sizeBytes: 1024 },
+        { sessionId: 'session-parent-child-3', origin: 'subagent', sizeBytes: 1024 },
+      ],
+    }),
+    makeEntry({ sessionId: 'session-plain', title: 'Plain', trashedAt: Date.now() - 2000 }),
+  ])
+  const client = createClient(factory, mini, payload)
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+  const rows = elementsByClass(tree, 'dsh-trash__row')
+  assert.deepEqual(rowTitles(tree), ['Parent', 'Plain'])
+  assert.deepEqual(
+    elementsByClass(rows[0], 'dsh-trash__badge').map((badge) => badge.children.join('')),
+    ['含 3 个子会话'],
+  )
+  assert.equal(elementByClass(rows[0], 'dsh-trash__badge--info').children.join(''), '含 3 个子会话')
+  assert.deepEqual(elementsByClass(rows[1], 'dsh-trash__badge'), [])
+  assert.equal(textOf(tree).includes('含 0 个子会话'), false)
+})
+
+test('moving a session with cascaded sub-sessions reports the count in the success Toast', async () => {
+  const { factory, mini } = await loadModule()
+  const client = createClient(factory, mini, statePayload(), {
+    [PREFLIGHT_ROUTE]: { body: { eligible: true } },
+    [TRASH_ROUTE]: {
+      body: {
+        ok: true,
+        entry: {
+          sessionId: 'session-alpha',
+          title: 'Alpha',
+          subagentCount: 2,
+          members: [
+            { sessionId: 'session-alpha', origin: null, sizeBytes: 2048 },
+            { sessionId: 'session-alpha-child-1', origin: 'subagent', sizeBytes: 512 },
+            { sessionId: 'session-alpha-child-2', origin: 'subagent', sizeBytes: 512 },
+          ],
+        },
+      },
+    },
+  })
+  const menu = client.menus.find((definition) => definition.id === 'session-trash.move')
+  assert.ok(menu !== undefined)
+  const actions = await menu.resolve({ sessionId: 'session-alpha', displayTitle: 'Alpha' })
+  assert.equal(actions.length, 1)
+  assert.equal(actions[0].id, 'move')
+  await actions[0].run()
+  assert.equal(client.toasts.at(-1).text, '「Alpha」及其 2 个子会话已移入回收站')
+  assert.equal(client.toasts.at(-1).success, true)
+  assert.equal(client.toasts.at(-1).action.label, '撤销')
 })
 
 test('a missing row offers only the index-removal action', async () => {

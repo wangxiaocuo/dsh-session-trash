@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Session trash",
-    "description": "Move cold sessions into a recoverable trash and restore or delete them within the retention window."
+    "description": "Move cold sessions, together with their hidden subagent children, into a recoverable trash; restore them within the retention window, or delete their logs permanently."
   }
 }

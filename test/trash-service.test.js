@@ -204,6 +204,19 @@ async function seedCrashEntry(harness, { id, state, source, trash }) {
     formatStatus: 'current',
     sizeBytes: measured.sizeBytes,
     fileCount: measured.fileCount,
+    members: [
+      {
+        sessionId: id,
+        origin: null,
+        title: id,
+        originalSessionDir: record.dir,
+        originalLogPath: record.logPath,
+        persistenceProjectDirHint: path.dirname(record.dir),
+        formatStatus: 'current',
+        sizeBytes: measured.sizeBytes,
+        fileCount: measured.fileCount,
+      },
+    ],
     lastError: null,
   }
   await harness.store.createObjectDir(trashId)
@@ -569,3 +582,317 @@ test('purge all isolates one failure and removes the rest on the next run', asyn
   assert.deepEqual(await fs.readdir(harness.store.objectsDir), [])
   await harness.dispose()
 })
+
+/**
+ * Seed one two-member (parent + hidden subagent child) entry with explicit
+ * member positions on disk, so the multi-directory crash matrix can be driven.
+ *
+ * @param {object} harness test harness.
+ * @param {{ id: string, childId: string, state: string, parentSource: boolean, parentTrash: boolean, childSource: boolean, childTrash: boolean }} input state row.
+ * @returns {Promise<{ entry: object, parent: object, child: object }>} the seeded pieces.
+ */
+async function seedTreeCrashEntry(harness, input) {
+  const project = path.join(harness.root, 'project')
+  await fs.mkdir(project, { recursive: true })
+  const parent = await harness.addSession({ id: input.id, cwd: project, title: input.id })
+  const child = await harness.addSession({
+    id: input.childId,
+    cwd: project,
+    title: input.childId,
+    origin: 'subagent',
+    parentSession: input.id,
+  })
+  const parentMeasured = await measureDirectory(parent.dir)
+  const childMeasured = await measureDirectory(child.dir)
+  const trashId = `20260101T000000-${input.id.replace(/[^a-z0-9]/gi, '').slice(0, 8).padEnd(8, '0')}`
+  const members = [
+    {
+      sessionId: input.id,
+      origin: null,
+      title: input.id,
+      originalSessionDir: parent.dir,
+      originalLogPath: parent.logPath,
+      persistenceProjectDirHint: path.dirname(parent.dir),
+      formatStatus: 'current',
+      sizeBytes: parentMeasured.sizeBytes,
+      fileCount: parentMeasured.fileCount,
+    },
+    {
+      sessionId: input.childId,
+      origin: 'subagent',
+      title: input.childId,
+      originalSessionDir: child.dir,
+      originalLogPath: child.logPath,
+      persistenceProjectDirHint: path.dirname(child.dir),
+      formatStatus: 'current',
+      sizeBytes: childMeasured.sizeBytes,
+      fileCount: childMeasured.fileCount,
+    },
+  ]
+  const entry = {
+    sessionId: input.id,
+    trashId,
+    state: input.state,
+    title: input.id,
+    trashedAt: input.state === 'trashed' ? Date.now() - 1000 : 0,
+    startedAt: Date.now() - 2000,
+    originalCwd: project,
+    workspaceExistsAtDeletion: true,
+    originalWorkspaceId: null,
+    originalWorkspaceTitle: null,
+    originalNextSessionId: null,
+    originalSessionDir: parent.dir,
+    originalLogPath: parent.logPath,
+    persistenceProjectDirHint: path.dirname(parent.dir),
+    formatStatus: 'current',
+    sizeBytes: parentMeasured.sizeBytes + childMeasured.sizeBytes,
+    fileCount: parentMeasured.fileCount + childMeasured.fileCount,
+    members,
+    lastError: null,
+  }
+  await harness.store.createObjectDir(trashId)
+  if (input.parentTrash) await fs.cp(parent.dir, harness.store.memberPath(trashId, 0, input.id), { recursive: true })
+  if (input.childTrash) {
+    await fs.cp(child.dir, harness.store.memberPath(trashId, 1, input.childId), { recursive: true })
+  }
+  if (!input.parentSource) await fs.rm(parent.dir, { recursive: true, force: true })
+  if (!input.childSource) await fs.rm(child.dir, { recursive: true, force: true })
+  await harness.store.writeMeta(entry)
+  await harness.store.commit([entry])
+  return { entry, parent, child }
+}
+
+test('cascade trash moves hidden subagent children and restores them together', async () => {
+  const harness = await createHarness()
+  const project = path.join(harness.root, 'project')
+  await fs.mkdir(project)
+  const parent = await harness.addSession({ id: 'session-parent', cwd: project, title: 'Parent' })
+  const childA = await harness.addSession({
+    id: 'child-a',
+    cwd: project,
+    title: 'A',
+    origin: 'subagent',
+    parentSession: 'session-parent',
+  })
+  const childB = await harness.addSession({
+    id: 'child-b',
+    cwd: project,
+    title: 'B',
+    origin: 'subagent',
+    parentSession: 'session-parent',
+  })
+  const workspace = harness.workspaces.add({ id: 'ws-1', path: project, sessionIds: ['session-parent'] })
+
+  const entry = await harness.service.trash('session-parent')
+  assert.equal(entry.state, 'trashed')
+  assert.equal(entry.members.length, 3)
+  assert.deepEqual(
+    entry.members.map((member) => member.sessionId),
+    ['session-parent', 'child-a', 'child-b'],
+  )
+  assert.deepEqual(
+    entry.members.map((member) => member.origin),
+    [null, 'subagent', 'subagent'],
+  )
+  assert.equal(
+    entry.sizeBytes,
+    entry.members.reduce((total, member) => total + member.sizeBytes, 0),
+  )
+  for (const record of [parent, childA, childB]) await assert.rejects(fs.stat(record.dir))
+  assert.equal(
+    await fs.readFile(path.join(harness.store.sessionPath(entry.trashId), 'session.v4.jsonl'), 'utf8'),
+    '{"type":"session/start"}\n',
+  )
+  assert.equal(
+    await fs.readFile(path.join(harness.store.memberPath(entry.trashId, 1, 'child-a'), 'session.v4.jsonl'), 'utf8'),
+    '{"type":"session/start"}\n',
+  )
+  assert.deepEqual(harness.emissions.at(-1), { event: 'api-session/removed', args: ['session-parent'] })
+
+  const state = await harness.stateService.snapshot()
+  assert.equal(state.entries[0].subagentCount, 2)
+  assert.deepEqual(
+    state.entries[0].members.map((member) => member.sessionId),
+    ['session-parent', 'child-a', 'child-b'],
+  )
+  assert.equal(
+    state.entries[0].sizeBytes,
+    entry.members.reduce((total, member) => total + member.sizeBytes, 0),
+  )
+
+  const result = await harness.service.restore('session-parent')
+  assert.equal(result.workspaceReattached, true)
+  for (const record of [parent, childA, childB]) {
+    assert.equal(await fs.readFile(record.logPath, 'utf8'), '{"type":"session/start"}\n')
+  }
+  assert.equal(harness.store.findEntry('session-parent'), undefined)
+  assert.deepEqual(await fs.readdir(harness.store.objectsDir), [])
+  assert.deepEqual(workspace.sessionIds, ['session-parent'])
+  assert.equal(harness.emissions.at(-1).event, 'api-session/added')
+  assert.equal(harness.emissions.at(-1).args[0].sessionId, 'session-parent')
+  await harness.dispose()
+})
+
+test('cascade purge deletes every session directory of the tree', async () => {
+  const harness = await createHarness()
+  const project = path.join(harness.root, 'project')
+  await fs.mkdir(project)
+  await harness.addSession({ id: 'session-parent', cwd: project, title: 'Parent' })
+  await harness.addSession({
+    id: 'child-a',
+    cwd: project,
+    title: 'A',
+    origin: 'subagent',
+    parentSession: 'session-parent',
+  })
+  const entry = await harness.service.trash('session-parent')
+  const result = await harness.service.purgeAll()
+  assert.equal(result.purged, 1)
+  assert.equal(result.failed, 0)
+  await assert.rejects(fs.stat(harness.store.objectDir(entry.trashId)))
+  assert.deepEqual(harness.store.entries(), [])
+  await harness.dispose()
+})
+
+test('cascade preflight refuses a live hidden child and leaves every directory', async () => {
+  const harness = await createHarness()
+  const project = path.join(harness.root, 'project')
+  await fs.mkdir(project)
+  const parent = await harness.addSession({ id: 'session-parent', cwd: project, title: 'Parent' })
+  const child = await harness.addSession({
+    id: 'child-a',
+    cwd: project,
+    title: 'A',
+    origin: 'subagent',
+    parentSession: 'session-parent',
+  })
+  harness.liveSessions.set('child-a', { id: 'child-a' })
+  await assert.rejects(harness.service.trash('session-parent'), trashCode('SESSION_LIVE'))
+  assert.equal(harness.store.entries().length, 0)
+  assert.equal((await fs.stat(parent.dir)).isDirectory(), true)
+  assert.equal((await fs.stat(child.dir)).isDirectory(), true)
+  harness.liveSessions.delete('child-a')
+  await harness.dispose()
+})
+
+test('cascade restore refuses when a child target directory reappeared', async () => {
+  const harness = await createHarness()
+  const project = path.join(harness.root, 'project')
+  await fs.mkdir(project)
+  const child = await harness.addSession({
+    id: 'child-a',
+    cwd: project,
+    title: 'A',
+    origin: 'subagent',
+    parentSession: 'session-parent',
+  })
+  await harness.addSession({ id: 'session-parent', cwd: project, title: 'Parent' })
+  const entry = await harness.service.trash('session-parent')
+  await fs.mkdir(child.dir, { recursive: true })
+  try {
+    await assert.rejects(harness.service.restore('session-parent'), trashCode('RESTORE_TARGET_EXISTS'))
+  } finally {
+    await harness.dispose()
+  }
+  assert.equal(entry.members.length, 2)
+})
+
+const treeMatrix = [
+  {
+    name: 'trashing, parent moved only -> complete forward',
+    state: 'trashing',
+    parentSource: false,
+    parentTrash: true,
+    childSource: true,
+    childTrash: false,
+    expect: 'trashed',
+    expectParentSource: false,
+    expectChildSource: false,
+  },
+  {
+    name: 'trashing, child moved only -> complete forward',
+    state: 'trashing',
+    parentSource: true,
+    parentTrash: false,
+    childSource: false,
+    childTrash: true,
+    expect: 'trashed',
+    expectParentSource: false,
+    expectChildSource: false,
+  },
+  {
+    name: 'trashing, one member lost -> missing',
+    state: 'trashing',
+    parentSource: true,
+    parentTrash: false,
+    childSource: false,
+    childTrash: false,
+    expect: 'missing',
+    expectParentSource: true,
+    expectChildSource: false,
+  },
+  {
+    name: 'restoring, parent restored only -> complete forward',
+    state: 'restoring',
+    parentSource: true,
+    parentTrash: false,
+    childSource: false,
+    childTrash: true,
+    expect: null,
+    expectParentSource: true,
+    expectChildSource: true,
+  },
+  {
+    name: 'restoring, child restored only -> complete forward',
+    state: 'restoring',
+    parentSource: false,
+    parentTrash: true,
+    childSource: true,
+    childTrash: false,
+    expect: null,
+    expectParentSource: true,
+    expectChildSource: true,
+  },
+  {
+    name: 'restoring, one member lost -> missing',
+    state: 'restoring',
+    parentSource: true,
+    parentTrash: false,
+    childSource: false,
+    childTrash: false,
+    expect: 'missing',
+    expectParentSource: true,
+    expectChildSource: false,
+  },
+]
+
+for (const row of treeMatrix) {
+  test(`tree recovery matrix: ${row.name}`, async () => {
+    const harness = await createHarness()
+    const seeded = await seedTreeCrashEntry(harness, {
+      id: `session-tree-${row.name.replace(/[^a-z0-9]+/g, '-')}`,
+      childId: `child-${row.name.replace(/[^a-z0-9]+/g, '-')}`,
+      state: row.state,
+      parentSource: row.parentSource,
+      parentTrash: row.parentTrash,
+      childSource: row.childSource,
+      childTrash: row.childTrash,
+    })
+    const summary = await harness.service.recover()
+    const current = harness.store.findEntry(seeded.entry.sessionId)
+    if (row.expect === null) assert.equal(current, undefined)
+    else assert.equal(current?.state, row.expect)
+    const parentSourceExists = await fs
+      .stat(seeded.parent.dir)
+      .then(() => true)
+      .catch(() => false)
+    const childSourceExists = await fs
+      .stat(seeded.child.dir)
+      .then(() => true)
+      .catch(() => false)
+    assert.equal(parentSourceExists, row.expectParentSource, 'parent source presence')
+    assert.equal(childSourceExists, row.expectChildSource, 'child source presence')
+    assert.equal(summary.changed, 1)
+    await harness.dispose()
+  })
+}

@@ -190,7 +190,10 @@ test('the menu resolves only for an eligible session', async () => {
   assert.equal(actions[0].separatorBefore, true)
 
   stubFetch({ [PREFLIGHT]: { body: { eligible: false, code: 'SESSION_LIVE' } } })
-  assert.deepEqual(await menu.resolve({ sessionId: 'session-b', displayTitle: 'Beta' }), [])
+  const refused = await menu.resolve({ sessionId: 'session-b', displayTitle: 'Beta' })
+  assert.equal(refused.length, 1)
+  assert.equal(refused[0].id, 'move-refused')
+  assert.equal(refused[0].label, '移入回收站（会话已打开）')
 
   globalThis.fetch = async () => {
     throw new Error('offline')
@@ -203,6 +206,51 @@ test('the menu resolves only for an eligible session', async () => {
     },
   }
   assert.deepEqual(await menu.resolve({ sessionId: 'session-d', displayTitle: 'Delta' }), [])
+})
+
+test('a blocked session explains why instead of hiding the menu entry', async () => {
+  const exported = await loadClientModule()
+  const client = createClient()
+  exported.apply(client.ctx)
+  const menu = client.menus[0]
+
+  const cases = [
+    {
+      code: 'SESSION_LIVE',
+      label: '移入回收站（会话已打开）',
+      toast: '该会话已在本机打开。DSH 目前不会释放已打开的会话，请重启 DSH 后再移入回收站。',
+    },
+    {
+      code: 'SESSION_ACTIVE',
+      label: '移入回收站（有任务在运行）',
+      toast: '该会话还有正在运行的任务或子代理，等它停下来后再移入回收站。',
+    },
+    {
+      code: 'SESSION_HAS_DESCENDANTS',
+      label: '移入回收站（含可见子会话）',
+      toast: '该会话包含可见的子会话，只能使用 DSH 自带的「归档」整棵会话树。',
+    },
+  ]
+  for (const refusal of cases) {
+    const requests = stubFetch({ [PREFLIGHT]: { body: { eligible: false, code: refusal.code, message: 'ignored' } } })
+    const actions = await menu.resolve({ sessionId: `session-${refusal.code}`, displayTitle: 'Blocked' })
+    assert.equal(actions.length, 1, refusal.code)
+    assert.equal(actions[0].id, 'move-refused')
+    assert.equal(actions[0].label, refusal.label)
+    assert.deepEqual(actions[0].icon, { key: 'session-trash.move' })
+    assert.equal(actions[0].separatorBefore, true)
+    assert.equal(typeof actions[0].run, 'function')
+
+    await actions[0].run()
+    assert.equal(client.toasts.at(-1).success, false, refusal.code)
+    assert.equal(client.toasts.at(-1).text, refusal.toast, refusal.code)
+    assert.equal(requests.calls.filter((call) => call.url.endsWith('/trash')).length, 0, refusal.code)
+  }
+
+  for (const code of ['SESSION_SUBAGENT', 'SESSION_NOT_FOUND', 'ALREADY_TRASHED', 'INDEX_CORRUPT', 'IO_ERROR', 'FORBIDDEN']) {
+    stubFetch({ [PREFLIGHT]: { body: { eligible: false, code } } })
+    assert.deepEqual(await menu.resolve({ sessionId: 'session-x', displayTitle: 'X' }), [], code)
+  }
 })
 
 test('moving a session shows one undo action and undo restores it', async () => {
@@ -239,6 +287,47 @@ test('moving a session shows one undo action and undo restores it', async () => 
     assert.equal(call.options.headers['X-DSH-Session-Trash'], '1')
     assert.equal(call.options.credentials, 'same-origin')
   }
+})
+
+test('moving a session with cascaded sub-sessions reports the count in the success Toast', async () => {
+  const exported = await loadClientModule()
+  const client = createClient()
+  exported.apply(client.ctx)
+  const menu = client.menus[0]
+
+  stubFetch({
+    [PREFLIGHT]: { body: { eligible: true } },
+    [TRASH]: {
+      body: {
+        ok: true,
+        entry: {
+          sessionId: 'session-a',
+          title: 'Alpha',
+          subagentCount: 2,
+          members: [
+            { sessionId: 'session-a', origin: null, sizeBytes: 1024 },
+            { sessionId: 'session-a-child-1', origin: 'subagent', sizeBytes: 512 },
+            { sessionId: 'session-a-child-2', origin: 'subagent', sizeBytes: 512 },
+          ],
+        },
+      },
+    },
+    [RESTORE]: {
+      body: { ok: true, session: { sessionId: 'session-a', title: 'Alpha', orphan: false, workspaceReattached: true } },
+    },
+  })
+  const actions = await menu.resolve({ sessionId: 'session-a', displayTitle: 'Alpha' })
+  await actions[0].run()
+
+  assert.equal(client.toasts.length, 1)
+  assert.equal(client.toasts[0].success, true)
+  assert.equal(client.toasts[0].text, '「Alpha」及其 2 个子会话已移入回收站')
+  assert.equal(client.toasts[0].action.label, '撤销')
+  assert.equal(client.toasts[0].action.failureLabel, '撤销失败')
+
+  await client.toasts[0].action.run()
+  assert.equal(client.toasts.at(-1).success, true)
+  assert.equal(client.toasts.at(-1).text, '已恢复「Alpha」')
 })
 
 test('undo retries as an orphan restore when the workspace is gone', async () => {

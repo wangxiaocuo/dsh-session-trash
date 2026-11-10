@@ -382,6 +382,7 @@ const betaProject = path.join(home, 'project-beta')
 const orderProject = path.join(home, 'project-order')
 const subagentProject = path.join(home, 'project-subagent')
 const parentProject = path.join(home, 'project-parent')
+const cascadeProject = path.join(home, 'project-cascade')
 const forgetProject = path.join(home, 'project-forget')
 const rebuildProject = path.join(home, 'project-rebuild')
 const cleanupProject = path.join(home, 'project-cleanup')
@@ -393,6 +394,8 @@ const orderIds = ['session-e2e-order-a', 'session-e2e-order-b', 'session-e2e-ord
 const subagentId = 'session-e2e-subagent'
 const parentId = 'session-e2e-parent'
 const childId = 'session-e2e-child'
+const cascadeParentId = 'session-e2e-cascade-parent'
+const cascadeChildIds = ['session-e2e-cascade-child-a', 'session-e2e-cascade-child-b']
 const forgetId = 'session-e2e-forget'
 const rebuildId = 'session-e2e-rebuild'
 const cleanupId = 'session-e2e-cleanup'
@@ -408,6 +411,7 @@ try {
     orderProject,
     subagentProject,
     parentProject,
+    cascadeProject,
     forgetProject,
     rebuildProject,
     cleanupProject,
@@ -423,6 +427,10 @@ try {
   await writeSession(home, subagentId, subagentProject, { origin: 'subagent' })
   await writeSession(home, parentId, parentProject)
   await writeSession(home, childId, parentProject, { parentSession: parentId })
+  await writeSession(home, cascadeParentId, cascadeProject)
+  for (const child of cascadeChildIds) {
+    await writeSession(home, child, cascadeProject, { origin: 'subagent', parentSession: cascadeParentId })
+  }
   await writeSession(home, forgetId, forgetProject)
   await writeSession(home, rebuildId, rebuildProject)
   await writeSession(home, cleanupId, cleanupProject)
@@ -519,6 +527,46 @@ try {
   assert.equal((await fs.stat(path.join(home, 'sessions', projectName(subagentProject), subagentId))).isDirectory(), true)
   assert.equal((await fs.stat(path.join(home, 'sessions', projectName(parentProject), parentId))).isDirectory(), true)
   pass('preflight/trash refusal matrix (missing, subagent, descendants)')
+
+  // --- Cascade trash ------------------------------------------------------
+  const cascadePreflight = await api.call('preflight', {
+    method: 'POST',
+    body: { sessionId: cascadeParentId },
+  })
+  assert.equal(cascadePreflight.status, 200)
+  assert.equal(cascadePreflight.body.eligible, true)
+  assert.equal(cascadePreflight.body.descendants, 2)
+  const cascadeTrashed = await api.call('trash', { method: 'POST', body: { sessionId: cascadeParentId } })
+  assert.equal(cascadeTrashed.status, 200)
+  assert.equal(cascadeTrashed.body.entry.state, 'trashed')
+  assert.equal(cascadeTrashed.body.entry.subagentCount, 2)
+  assert.equal(cascadeTrashed.body.entry.members.length, 3)
+  for (const id of [cascadeParentId, ...cascadeChildIds]) {
+    await assert.rejects(fs.stat(path.join(home, 'sessions', projectName(cascadeProject), id)))
+  }
+  const cascadeEntry = await findEntry(home, cascadeParentId)
+  assert.equal((await fs.stat(path.join(home, '.session-trash', 'objects', cascadeEntry.trashId, 'session'))).isDirectory(), true)
+  for (const child of cascadeChildIds) {
+    assert.equal(
+      (await fs.stat(path.join(home, '.session-trash', 'objects', cascadeEntry.trashId, 'children', child))).isDirectory(),
+      true,
+    )
+  }
+  const cascadeState = await api.call('state')
+  const cascadeRow = cascadeState.body.entries.find((entry) => entry.sessionId === cascadeParentId)
+  assert.equal(cascadeRow.subagentCount, 2)
+  assert.deepEqual(
+    cascadeRow.members.map((member) => member.sessionId),
+    [cascadeParentId, ...cascadeChildIds],
+  )
+  const cascadeRestored = await api.call('restore', { method: 'POST', body: { sessionId: cascadeParentId } })
+  assert.equal(cascadeRestored.status, 200)
+  for (const id of [cascadeParentId, ...cascadeChildIds]) {
+    assert.equal((await fs.stat(path.join(home, 'sessions', projectName(cascadeProject), id))).isDirectory(), true)
+  }
+  const cascadeAgain = await api.call('preflight', { method: 'POST', body: { sessionId: cascadeParentId } })
+  assert.equal(cascadeAgain.body.eligible, true)
+  pass('cascade trash and restore move the whole hidden tree')
 
   // --- Trash + undo -------------------------------------------------------
   const trashed = await api.call('trash', { method: 'POST', body: { sessionId: alphaId } })

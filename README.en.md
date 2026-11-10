@@ -10,7 +10,8 @@ Status: feature complete and covered by the regression suite. macOS has been ver
 
 ## Features
 
-- Right-click a session in the sidebar and choose "Move to trash". The item appears only for cold sessions with no persisted children and no running turn, job, subagent, or scheduled task.
+- Right-click a session in the sidebar and choose "Move to trash". It is available for cold sessions with no running turn, job, subagent, or scheduled task; hidden subagent children move with their parent and are restored together.
+- For sessions that are still open, still running work, or own visible child sessions, the menu keeps a labelled explanatory "Move to trash" item that states why the move is unavailable instead of hiding the entry entirely.
 - After the move, the shared DSH Toast offers one action: Undo. Undo tries a normal restore first and falls back to an orphan restore when the original workspace is gone.
 - The Trash page in Settings shows title, Session ID, original workspace, trashed date, remaining days, size, and status. The list supports search, filters, and paging at 50 rows per page.
 - Row actions include restore, restore as orphan, permanent deletion, removal from the index, copying the Session ID, and revealing the original workspace in Finder or Explorer.
@@ -102,6 +103,8 @@ Defaults apply when `config` is omitted. Invalid values reject activation instea
 
 Right-click a cold session and choose "Move to trash". After the Toast disappears, open Settings, then Trash, and restore the session. If the original workspace directory is gone, the page asks for confirmation and restores the session as an orphan under "Ungrouped". To empty the trash at once, use "Delete all permanently" in the toolbar and confirm; entries that have not expired are deleted too.
 
+Trash rows that own hidden subagent children show a badge with the child count; restore and permanent deletion always cover the whole tree.
+
 The current DSH version keeps a live agent for a session after it is opened, until the Host process exits. An idle session is still live, so the menu item stays hidden. Restart DSH before trashing it, or archive it. A second DSH instance does not detect a session that is live in another process, so do not use one to bypass this check.
 
 ## HTTP API
@@ -111,8 +114,8 @@ All routes live under `/plugins/dsh-session-trash/api/` and are registered as ex
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/state` | Config, index state, entries, stats, and cleanup diagnostics; may schedule a throttled page-open cleanup |
-| `POST` | `/preflight` | `{ sessionId }` returns `{ eligible: true }` or `{ eligible: false, code, message }` |
-| `POST` | `/trash` | `{ sessionId }`; moves the session directory |
+| `POST` | `/preflight` | `{ sessionId }` returns `{ eligible: true, descendants }` or `{ eligible: false, code, message, details? }`; `descendants` is the number of hidden children that move along |
+| `POST` | `/trash` | `{ sessionId }`; moves the whole session tree (parent plus hidden subagent children) and returns `{ ok, entry }` |
 | `POST` | `/restore` | `{ sessionId, mode: 'normal' \| 'orphan' }` |
 | `POST` | `/purge` | `{ sessionId }`; permanently deletes the session log |
 | `POST` | `/purge-all` | No body; permanently deletes every entry in the trash, dropping `missing` index records only; returns `{ ok, purged, forgotten, failed }` |
@@ -129,6 +132,8 @@ Restore and maintenance refusals include `TRASH_ENTRY_NOT_FOUND`, `TRASH_STATE_I
 
 `/state.stats.cleanup` reports the last cleanup attempt, the next sweep, a pending retry, consecutive failures, and the last run summary.
 
+`/state` entries gain `subagentCount` (hidden children moved along) and `members` (parent first, each with `sessionId`, `origin`, and `sizeBytes`); `sizeBytes`/`fileCount` cover the whole tree. The `entry` returned by `/trash` uses the same shape.
+
 ## Storage and recovery
 
 ```text
@@ -139,7 +144,9 @@ Restore and maintenance refusals include `TRASH_ENTRY_NOT_FOUND`, `TRASH_STATE_I
   objects/
     <trashId>/
       meta.json             # object metadata
-      session/              # the moved session directory
+      session/              # the moved parent session directory
+      children/
+        <sessionId>/        # hidden subagent child directory moved along
 ```
 
 The index is committed atomically with `tmp`, `fsync`, and `rename`, and the previous commit is kept as `.bak`. On activation and before every sweep, the plugin settles unfinished `trashing`, `restoring`, and `purging` entries. It completes what can be completed, rolls back what can be rolled back, marks uncertain cases as `missing`, and never deletes a session log during that recovery pass.
@@ -148,10 +155,13 @@ A same-filesystem move uses `rename`. A cross-filesystem move copies into a temp
 
 On POSIX filesystems, the trash root uses `0700` permissions and the index and metadata files use `0600`. A lock older than 10 minutes is treated as stale.
 
+The index schema is v2; a v1 index is upgraded automatically on startup and preserved as `.bak`. Older plugin releases cannot read v2 and enter protection mode, so empty the trash before downgrading.
+
 ## Limitations
 
-- The current DSH version keeps an opened session live until the Host process exits. The "Move to trash" item stays hidden for such a session. Restart DSH before trashing it.
-- Parent sessions with persisted children and subagent sessions cannot be trashed on their own. Archive the whole tree instead.
+- The current DSH version keeps an opened session live until the Host process exits. The context menu then shows the explanatory item instead of an actionable move; restart DSH before trashing it.
+- Parent sessions with visible (non-subagent) children cannot be trashed on their own; archive the whole tree instead. Hidden subagent children move with their parent.
+- A trashed tree is restored or deleted as a whole; there is no partial restore. If any member directory is missing, the entry is marked `missing` and can only be purged or forgotten.
 - Orphan restore never recreates the original workspace directory and never reattaches the session to a workspace.
 - Archive and pin state survive trash and restore. The Trash page does not manage either set.
 - Permanent deletion removes the session log only. Attachments, images, projection-cache rows, and search-index rows are not deleted.

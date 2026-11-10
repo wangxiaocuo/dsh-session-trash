@@ -24,6 +24,18 @@ window.__ModuleLoader__.load({
       'workspace-missing': 'filterWorkspaceMissing',
       expiring: 'filterExpiring',
     }
+    /**
+     * Preflight refusals the user can act on themselves. Those keep a visible
+     * menu entry that explains the refusal instead of hiding it.
+     */
+    const MOVE_BLOCKED_KEYS = {
+      SESSION_LIVE: { label: 'moveBlockedLive', toast: 'blockedLiveToast' },
+      SESSION_ACTIVE: { label: 'moveBlockedActive', toast: 'blockedActiveToast' },
+      SESSION_HAS_DESCENDANTS: {
+        label: 'moveBlockedDescendants',
+        toast: 'blockedDescendantsToast',
+      },
+    }
 
     /** Open trash views subscribe here so one successful mutation refreshes them all. */
     const revisionListeners = new Set()
@@ -110,6 +122,7 @@ window.__ModuleLoader__.load({
       badgeMigration: '需要迁移',
       badgeExpiring: '即将到期',
       badgeExpired: '已过期',
+      badgeSubagents: '含 {count} 个子会话',
       stateTrashing: '正在移入…',
       stateRestoring: '正在恢复…',
       statePurging: '正在删除…',
@@ -153,9 +166,16 @@ window.__ModuleLoader__.load({
       lastErrorLabel: '上次错误：{message}',
       footnote: '回收站目录：{path}',
       move: '移入回收站',
+      moveBlockedLive: '移入回收站（会话已打开）',
+      moveBlockedActive: '移入回收站（有任务在运行）',
+      moveBlockedDescendants: '移入回收站（含可见子会话）',
       undo: '撤销',
       undoFailed: '撤销失败',
       trashSuccess: '已将「{title}」移入回收站',
+      trashSuccessTree: '「{title}」及其 {count} 个子会话已移入回收站',
+      blockedLiveToast: '该会话已在本机打开。DSH 目前不会释放已打开的会话，请重启 DSH 后再移入回收站。',
+      blockedActiveToast: '该会话还有正在运行的任务或子代理，等它停下来后再移入回收站。',
+      blockedDescendantsToast: '该会话包含可见的子会话，只能使用 DSH 自带的「归档」整棵会话树。',
       restoreSuccess: '已恢复「{title}」',
       restoreOrphanSuccess: '已恢复为孤儿会话「{title}」',
       purgeSuccess: '已永久删除「{title}」',
@@ -239,6 +259,7 @@ window.__ModuleLoader__.load({
       badgeMigration: 'Migration required',
       badgeExpiring: 'Expiring soon',
       badgeExpired: 'Expired',
+      badgeSubagents: '{count} sub-sessions',
       stateTrashing: 'Moving…',
       stateRestoring: 'Restoring…',
       statePurging: 'Deleting…',
@@ -282,9 +303,16 @@ window.__ModuleLoader__.load({
       lastErrorLabel: 'Last error: {message}',
       footnote: 'Trash directory: {path}',
       move: 'Move to trash',
+      moveBlockedLive: 'Move to trash (session is open)',
+      moveBlockedActive: 'Move to trash (work is running)',
+      moveBlockedDescendants: 'Move to trash (has visible sub-sessions)',
       undo: 'Undo',
       undoFailed: 'Could not undo',
       trashSuccess: 'Moved “{title}” to the trash',
+      trashSuccessTree: '“{title}” and its {count} sub-sessions were moved to the trash',
+      blockedLiveToast: 'This session is open in DSH. DSH does not release opened sessions yet; restart DSH, then move it to the trash.',
+      blockedActiveToast: 'This session still has running work; wait for it to stop, then move it to the trash.',
+      blockedDescendantsToast: 'This session has visible child sessions; use the built-in Archive action for the whole tree instead.',
       restoreSuccess: 'Restored “{title}”',
       restoreOrphanSuccess: 'Restored “{title}” as an orphan session',
       purgeSuccess: 'Permanently deleted “{title}”',
@@ -490,7 +518,7 @@ window.__ModuleLoader__.load({
     /**
      * @param {string} sessionId session whose eligibility to ask for.
      * @param {AbortSignal} [outerSignal] cancellation from the menu occurrence.
-     * @returns {Promise<{ eligible: boolean, code?: string } | null>} the verdict, or null when unknown.
+     * @returns {Promise<{ eligible: boolean, code?: string, message?: string, details?: unknown } | null>} the verdict, or null when unknown.
      */
     async function preflight(sessionId, outerSignal) {
       const controller = new AbortController()
@@ -1526,6 +1554,14 @@ window.__ModuleLoader__.load({
           if (entry.formatStatus === 'migration-required') {
             badges.push({ key: 'migration', label: t('badgeMigration'), tone: 'warn' })
           }
+          const subagentCount = entry.subagentCount ?? 0
+          if (subagentCount > 0) {
+            badges.push({
+              key: 'subagents',
+              label: format(t('badgeSubagents'), { count: subagentCount }),
+              tone: 'info',
+            })
+          }
           const retention = remaining(entry, locale, now)
           if (retention.days !== null && retention.days <= 3) {
             badges.push({
@@ -2019,14 +2055,23 @@ window.__ModuleLoader__.load({
               return
             }
             bumpRevision()
-            const responseTitle = payload !== null && payload !== undefined && payload.entry !== undefined ? payload.entry.title : undefined
+            const responseEntry = payload !== null && payload !== undefined ? payload.entry : undefined
+            const responseTitle = responseEntry !== null && responseEntry !== undefined ? responseEntry.title : undefined
             const title =
               typeof responseTitle === 'string' && responseTitle !== ''
                 ? responseTitle
                 : typeof fallbackTitle === 'string' && fallbackTitle !== ''
                   ? fallbackTitle
                   : sessionId
-            ctx.contextMenus.notify(format(t('trashSuccess'), { title }), true, {
+            const subagentCount =
+              responseEntry !== null && responseEntry !== undefined && typeof responseEntry.subagentCount === 'number'
+                ? responseEntry.subagentCount
+                : 0
+            const message =
+              subagentCount > 0
+                ? format(t('trashSuccessTree'), { title, count: subagentCount })
+                : format(t('trashSuccess'), { title })
+            ctx.contextMenus.notify(message, true, {
               label: t('undo'),
               run: () => undoTrash(sessionId, title),
               failureLabel: t('undoFailed'),
@@ -2153,7 +2198,20 @@ window.__ModuleLoader__.load({
                   }
                 }
                 const verdict = await preflight(sessionId, signal)
-                if (verdict === null || verdict.eligible !== true) return []
+                if (verdict === null) return []
+                if (verdict.eligible !== true) {
+                  const blocked = typeof verdict.code === 'string' ? MOVE_BLOCKED_KEYS[verdict.code] : undefined
+                  if (blocked === undefined) return []
+                  return [
+                    {
+                      id: 'move-refused',
+                      label: t(blocked.label),
+                      icon: { key: MENU_ID },
+                      separatorBefore: true,
+                      run: () => ctx.contextMenus.notify(t(blocked.toast), false),
+                    },
+                  ]
+                }
                 return [
                   {
                     id: 'move',

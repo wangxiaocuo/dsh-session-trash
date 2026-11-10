@@ -133,7 +133,10 @@ function createApi(options = {}) {
   }
   registerApi({
     ctx,
-    eligibility: { evaluate: async (sessionId) => ({ eligible: true, sessionId }), invalidate() {} },
+    eligibility: {
+      evaluate: options.eligibility ?? (async (sessionId) => ({ eligible: true, sessionId })),
+      invalidate() {},
+    },
     stateService: {
       async snapshot() {
         if (options.state !== undefined) return options.state()
@@ -411,4 +414,34 @@ test('a route refuses the wrong HTTP method before authentication', async () => 
   const result = await call('trash', { method: 'GET', headers: { host: '127.0.0.1:3080' } })
   assert.equal(result.status, 405)
   assert.equal(result.headers.allow, 'POST')
+})
+
+test('POST /preflight summarizes an eligible cascade without leaking member paths', async () => {
+  const { call } = createApi({
+    eligibility: async () => ({
+      eligible: true,
+      members: [
+        { sessionId: 'session-a', location: { path: '/tmp/session-a/session.v4.jsonl' } },
+        { sessionId: 'child-1', location: { path: '/tmp/child-1/session.v4.jsonl' } },
+        { sessionId: 'child-2', location: { path: '/tmp/child-2/session.v4.jsonl' } },
+      ],
+    }),
+  })
+  const result = await call('preflight', {
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ sessionId: 'session-a' }),
+  })
+  assert.equal(result.status, 200)
+  assert.deepEqual(result.body, { eligible: true, descendants: 2 })
+})
+
+test('POST /preflight forwards a refusal verdict unchanged', async () => {
+  const refusal = { eligible: false, code: 'SESSION_LIVE', message: 'This session is open.' }
+  const { call } = createApi({ eligibility: async () => refusal })
+  const result = await call('preflight', {
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ sessionId: 'session-a' }),
+  })
+  assert.equal(result.status, 200)
+  assert.deepEqual(result.body, refusal)
 })
