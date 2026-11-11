@@ -21,6 +21,13 @@ window.__ModuleLoader__.load({
     const EXPIRING_DAYS = 3
     /** Filter identifiers in their sidebar order. */
     const FILTERS = ['all', 'workspace-exists', 'workspace-missing', 'expiring']
+    /** Sort options in their menu order. */
+    const SORT_OPTIONS = [
+      { value: 'trashed', key: 'sortTrashed' },
+      { value: 'title', key: 'sortTitle' },
+      { value: 'size', key: 'sortSize' },
+      { value: 'expires', key: 'sortExpires' },
+    ]
     /** Locale keys for each filter label. */
     const FILTER_LABEL_KEYS = {
       all: 'filterAll',
@@ -56,12 +63,38 @@ window.__ModuleLoader__.load({
 
     /** Open trash views subscribe here so one successful mutation refreshes them all. */
     const revisionListeners = new Set()
+    /** Cross-window channel name; same-origin tabs refresh each other. */
+    const REVISION_CHANNEL_NAME = 'dsh-session-trash/revision'
+    /** Lazily created BroadcastChannel shared by every view in this tab. */
+    let revisionChannel = null
+    let revisionChannelTried = false
 
     /**
-     * Notify every mounted trash view that the Host index changed.
+     * Open the cross-window revision channel once, when the platform supports it.
      * @returns {void}
      */
-    function bumpRevision() {
+    function ensureRevisionChannel() {
+      if (revisionChannelTried) return
+      revisionChannelTried = true
+      const Ctor = typeof window === 'undefined' ? undefined : window.BroadcastChannel
+      if (typeof Ctor !== 'function') return
+      try {
+        revisionChannel = new Ctor(REVISION_CHANNEL_NAME)
+        revisionChannel.addEventListener('message', (event) => {
+          if (event === null || event === undefined) return
+          const data = event.data
+          if (data === null || typeof data !== 'object') return
+          if (data.type === 'revision') notifyRevisionListeners()
+        })
+      } catch {
+        revisionChannel = null
+      }
+    }
+
+    /**
+     * @returns {void}
+     */
+    function notifyRevisionListeners() {
       for (const listener of [...revisionListeners]) {
         try {
           listener()
@@ -72,10 +105,26 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * Notify every mounted trash view in this tab and across same-origin tabs.
+     * @returns {void}
+     */
+    function bumpRevision() {
+      ensureRevisionChannel()
+      notifyRevisionListeners()
+      if (revisionChannel === null) return
+      try {
+        revisionChannel.postMessage({ type: 'revision' })
+      } catch {
+        // A closed channel must never break the mutation that triggered it.
+      }
+    }
+
+    /**
      * @param {() => void} listener refresh callback.
      * @returns {() => void} unsubscribe.
      */
     function subscribeRevision(listener) {
+      ensureRevisionChannel()
       revisionListeners.add(listener)
       return () => {
         revisionListeners.delete(listener)
@@ -97,6 +146,24 @@ window.__ModuleLoader__.load({
       searchPlaceholder: '搜索标题、Session ID 或原始工作区',
       searchClear: '清除搜索',
       resultsCount: '显示 {shown} / {total} 个会话',
+      selectRow: '选择「{title}」',
+      selectAll: '全选本页可选会话',
+      selectedCount: '已选择 {count} 个会话',
+      clearSelection: '取消选择',
+      batchRestore: '恢复选中',
+      batchRestoring: '正在恢复…',
+      batchRestoreDoneOne: '已恢复 {count} 个会话',
+      batchRestoreDoneOther: '已恢复 {count} 个会话',
+      batchRestorePartial: '已恢复 {restored} 个会话，{failed} 个失败',
+      sortLabel: '排序方式',
+      sortTrashed: '按移入时间（最新在前）',
+      sortTitle: '按标题',
+      sortSize: '按大小（最大在前）',
+      sortExpires: '按到期时间（最早在前）',
+      expandMembers: '展开子会话',
+      collapseMembers: '收起子会话',
+      memberParent: '父会话',
+      memberSubagent: '子会话',
       filterLabel: '筛选回收站',
       filterAll: '全部',
       filterWorkspaceExists: '工作区仍存在',
@@ -259,6 +326,24 @@ window.__ModuleLoader__.load({
       searchPlaceholder: 'Search title, Session ID, or original workspace',
       searchClear: 'Clear search',
       resultsCount: 'Showing {shown} of {total} sessions',
+      selectRow: 'Select “{title}”',
+      selectAll: 'Select all selectable sessions on this page',
+      selectedCount: 'Selected: {count} sessions',
+      clearSelection: 'Clear selection',
+      batchRestore: 'Restore selected',
+      batchRestoring: 'Restoring…',
+      batchRestoreDoneOne: 'Restored {count} session',
+      batchRestoreDoneOther: 'Restored {count} sessions',
+      batchRestorePartial: 'Restored {restored}; {failed} failed',
+      sortLabel: 'Sort by',
+      sortTrashed: 'Newest trashed first',
+      sortTitle: 'Title',
+      sortSize: 'Largest first',
+      sortExpires: 'Expiring soonest first',
+      expandMembers: 'Show sub-sessions',
+      collapseMembers: 'Hide sub-sessions',
+      memberParent: 'Parent',
+      memberSubagent: 'Sub-session',
       filterLabel: 'Filter the trash',
       filterAll: 'All',
       filterWorkspaceExists: 'Workspace exists',
@@ -431,6 +516,27 @@ window.__ModuleLoader__.load({
     function countText(t, key, count, values = {}) {
       const template = t(`${key}${count === 1 ? 'One' : 'Other'}`)
       return format(template, { ...values, count })
+    }
+
+    /**
+     * Compare two trash entries for the selected sort order.
+     *
+     * @param {any} left first entry.
+     * @param {any} right second entry.
+     * @param {string} sortKey active sort identifier.
+     * @param {string | undefined} locale active locale.
+     * @returns {number} comparator result.
+     */
+    function compareEntries(left, right, sortKey, locale) {
+      const titleOf = (entry) => (typeof entry.title === 'string' && entry.title !== '' ? entry.title : entry.sessionId)
+      if (sortKey === 'title') return String(titleOf(left)).localeCompare(String(titleOf(right)), locale)
+      if (sortKey === 'size') return (Number(right.sizeBytes) || 0) - (Number(left.sizeBytes) || 0)
+      if (sortKey === 'expires') {
+        const leftAt = typeof left.expiresAt === 'number' ? left.expiresAt : Number.POSITIVE_INFINITY
+        const rightAt = typeof right.expiresAt === 'number' ? right.expiresAt : Number.POSITIVE_INFINITY
+        return leftAt - rightAt
+      }
+      return (right.trashedAt ?? 0) - (left.trashedAt ?? 0)
     }
 
     /**
@@ -848,6 +954,26 @@ window.__ModuleLoader__.load({
       .dsh-trash__dialogBody { margin: 0; font-size: 13px; line-height: 1.6; color: var(--dsw-alias-label-secondary); overflow-wrap: anywhere; }
       .dsh-trash__dialogActions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
       .dsh-trash__srOnly { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+      .dsh-trash__controlsRight { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; margin-left: auto; }
+      .dsh-trash__selectAll { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; line-height: 1.5; color: var(--dsw-alias-label-secondary); cursor: pointer; white-space: nowrap; }
+      .dsh-trash__selectAllInput { width: 14px; height: 14px; margin: 0; flex: none; accent-color: var(--dsw-alias-state-business-primary); }
+      .dsh-trash__sort { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; line-height: 1.5; color: var(--dsw-alias-label-secondary); }
+      .dsh-trash__sortLabel { white-space: nowrap; }
+      .dsh-trash__sortSelect { height: 28px; padding: 0 8px; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); font: inherit; font-size: 12.5px; }
+      .dsh-trash__sortSelect:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 1px; }
+      .dsh-trash__rowCheck { width: 15px; height: 15px; margin: 3px 0 0; flex: none; accent-color: var(--dsw-alias-state-business-primary); }
+      .dsh-trash__batch { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); background: var(--dsw-alias-bg-layer-2); }
+      .dsh-trash__batchCount { margin-right: auto; font-size: 12.5px; line-height: 1.5; color: var(--dsw-alias-label-secondary); }
+      .dsh-trash__membersWrap { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+      .dsh-trash__membersToggle { appearance: none; align-self: flex-start; border: none; background: none; padding: 0; color: var(--dsw-alias-state-business-primary); font: inherit; font-size: 12.5px; line-height: 1.5; cursor: pointer; }
+      .dsh-trash__membersToggle:hover { text-decoration: underline; }
+      .dsh-trash__membersToggle:focus-visible { outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 2px; }
+      .dsh-trash__members { list-style: none; margin: 0; padding: 0 0 0 10px; display: flex; flex-direction: column; gap: 4px; border-left: 2px solid var(--dsw-alias-border-l1); }
+      .dsh-trash__member { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12.5px; line-height: 1.5; color: var(--dsw-alias-label-secondary); }
+      .dsh-trash__memberKind { color: var(--dsw-alias-label-tertiary); }
+      .dsh-trash__memberId { font-family: var(--dsw-font-mono, monospace); word-break: break-all; }
+      .dsh-trash__memberSize { margin-left: auto; color: var(--dsw-alias-label-tertiary); }
+
       @media (max-width: 560px) {
         .dsh-trash__row { flex-direction: column; }
         .dsh-trash__rowActions { align-self: flex-end; }
@@ -1188,6 +1314,10 @@ window.__ModuleLoader__.load({
         const [query, setQuery] = React.useState('')
         const [filter, setFilter] = React.useState('all')
         const [page, setPage] = React.useState(1)
+        const [selectedIds, setSelectedIds] = React.useState(() => new Set())
+        const [sortKey, setSortKey] = React.useState('trashed')
+        const [expandedRows, setExpandedRows] = React.useState(() => new Set())
+        const [batchRestoring, setBatchRestoring] = React.useState(false)
         const abortRef = React.useRef(null)
         const searchRef = React.useRef(null)
         const panelRef = React.useRef(null)
@@ -1434,7 +1564,7 @@ window.__ModuleLoader__.load({
 
         const data = view.data
         const entries = data !== null && Array.isArray(data.entries) ? [...data.entries] : []
-        entries.sort((left, right) => (right.trashedAt ?? 0) - (left.trashedAt ?? 0))
+        entries.sort((left, right) => compareEntries(left, right, sortKey, locale))
         const retentionDays =
           data !== null && data.config !== undefined && typeof data.config.retentionDays === 'number'
             ? data.config.retentionDays
@@ -1467,7 +1597,12 @@ window.__ModuleLoader__.load({
         const refreshing = view.status === 'refreshing'
         const readsBusy = loading || refreshing
         const pendingCount =
-          pendingRows.size + (cleaning ? 1 : 0) + (purgingAll ? 1 : 0) + (rebuilding ? 1 : 0) + (forgettingOrphans ? 1 : 0)
+          pendingRows.size +
+          (cleaning ? 1 : 0) +
+          (purgingAll ? 1 : 0) +
+          (rebuilding ? 1 : 0) +
+          (forgettingOrphans ? 1 : 0) +
+          (batchRestoring ? 1 : 0)
         /** Any write (row action or maintenance) is in flight. */
         const mutationBusy = pendingCount > 0
         const corrupt = data !== null && data.index !== undefined && data.index.status === 'corrupt'
@@ -1512,6 +1647,10 @@ window.__ModuleLoader__.load({
         const pageStart = (currentPage - 1) * PAGE_SIZE
         const visibleEntries = filteredEntries.slice(pageStart, pageStart + PAGE_SIZE)
         const filtersActive = normalizedQuery !== '' || filter !== 'all'
+        const pageSelectable = visibleEntries.filter((entry) => isSelectable(entry))
+        const selectedEntries = entries.filter((entry) => selectedIds.has(entry.sessionId) && isSelectable(entry))
+        const allPageSelected =
+          pageSelectable.length > 0 && pageSelectable.every((entry) => selectedIds.has(entry.sessionId))
 
         /**
          * @returns {void} focus the search field when it is mounted.
@@ -1548,11 +1687,116 @@ window.__ModuleLoader__.load({
 
         /**
          * @param {object} entry wire entry.
+         * @returns {boolean} whether this row can join a batch restore.
+         */
+        function isSelectable(entry) {
+          return entry.canRestore === true && entry.requiresOrphanRestore !== true
+        }
+
+        /**
+         * @param {string} sessionId selected row identity.
+         * @returns {void}
+         */
+        function toggleSelected(sessionId) {
+          setSelectedIds((previous) => {
+            const next = new Set(previous)
+            if (next.has(sessionId)) next.delete(sessionId)
+            else next.add(sessionId)
+            return next
+          })
+        }
+
+        /**
+         * @param {boolean} checked whether the page should be selected.
+         * @returns {void}
+         */
+        function togglePageSelection(checked) {
+          setSelectedIds((previous) => {
+            const next = new Set(previous)
+            for (const entry of pageSelectable) {
+              if (checked) next.add(entry.sessionId)
+              else next.delete(entry.sessionId)
+            }
+            return next
+          })
+        }
+
+        /**
+         * @returns {void}
+         */
+        function clearSelection() {
+          setSelectedIds(new Set())
+        }
+
+        /**
+         * @param {string} sessionId row whose member list is toggled.
+         * @returns {void}
+         */
+        function toggleExpanded(sessionId) {
+          setExpandedRows((previous) => {
+            const next = new Set(previous)
+            if (next.has(sessionId)) next.delete(sessionId)
+            else next.add(sessionId)
+            return next
+          })
+        }
+
+        /**
+         * Restore every selected row, one Host request at a time. Failures are
+         * collected per row and summarized in one Toast.
+         *
+         * @returns {Promise<void>} completion of the operation.
+         */
+        async function performBatchRestore() {
+          if (!beginWrite()) return
+          const targets = selectedEntries.slice()
+          setBatchRestoring(true)
+          let restored = 0
+          let failed = 0
+          try {
+            for (const entry of targets) {
+              if (!aliveRef.current) return
+              const outcome = await sendMutation('restore', { sessionId: entry.sessionId, mode: 'normal' })
+              if (!aliveRef.current || outcome.kind === 'cancelled') return
+              if (outcome.kind !== 'response') {
+                failed += 1
+                recordRowError(entry, transportMessage(outcome.kind))
+                continue
+              }
+              if (!outcome.ok) {
+                failed += 1
+                recordRowError(entry, describeActionFailure(outcome.status, outcome.payload, t))
+                continue
+              }
+              restored += 1
+              clearRowError(entry.sessionId)
+            }
+            if (!aliveRef.current) return
+            bumpRevision()
+            clearSelection()
+            const message =
+              failed === 0
+                ? countText(t, 'batchRestoreDone', restored)
+                : format(t('batchRestorePartial'), { restored, failed })
+            ctx.contextMenus.notify(message, failed === 0)
+            announce(message)
+          } finally {
+            endWrite()
+            if (aliveRef.current) setBatchRestoring(false)
+          }
+        }
+
+        /**
+         * @param {object} entry wire entry.
          * @param {string} message localized failure text.
          * @returns {void}
          */
-        function fail(entry, message) {
+        function recordRowError(entry, message) {
           setRowErrors((previous) => ({ ...previous, [entry.sessionId]: message }))
+        }
+
+        function fail(entry, message) {
+          recordRowError(entry, message)
           ctx.contextMenus.notify(message, false)
         }
 
@@ -2178,13 +2422,48 @@ window.__ModuleLoader__.load({
                           h(CloseGlyph, { size: 11 }),
                         ),
                   ),
-                  filtersActive
-                    ? h(
-                        'span',
-                        { className: 'dsh-trash__resultsCount' },
-                        format(t('resultsCount'), { shown: filteredEntries.length, total: entries.length }),
-                      )
-                    : null,
+                  h(
+                    'div',
+                    { className: 'dsh-trash__controlsRight' },
+                    filtersActive
+                      ? h(
+                          'span',
+                          { className: 'dsh-trash__resultsCount' },
+                          format(t('resultsCount'), { shown: filteredEntries.length, total: entries.length }),
+                        )
+                      : null,
+                    h(
+                      'label',
+                      { className: 'dsh-trash__selectAll' },
+                      h('input', {
+                        type: 'checkbox',
+                        className: 'dsh-trash__selectAllInput',
+                        checked: allPageSelected,
+                        'aria-label': t('selectAll'),
+                        disabled: pageSelectable.length === 0 || loading || mutationBusy || corrupt,
+                        onChange: (event) => togglePageSelection(event.target.checked),
+                      }),
+                      h('span', null, t('selectAll')),
+                    ),
+                    h(
+                      'label',
+                      { className: 'dsh-trash__sort' },
+                      h('span', { className: 'dsh-trash__sortLabel' }, t('sortLabel')),
+                      h(
+                        'select',
+                        {
+                          className: 'dsh-trash__sortSelect',
+                          value: sortKey,
+                          'aria-label': t('sortLabel'),
+                          onChange: (event) => {
+                            setSortKey(event.target.value)
+                            setPage(1)
+                          },
+                        },
+                        SORT_OPTIONS.map((option) => h('option', { value: option.value, key: option.value }, t(option.key))),
+                      ),
+                    ),
+                  ),
                 ),
                 h(
                   'div',
@@ -2209,6 +2488,37 @@ window.__ModuleLoader__.load({
                       h('span', { className: 'dsh-trash__filterLabel' }, t(FILTER_LABEL_KEYS[value])),
                     ),
                   ),
+                ),
+              )
+
+        const batchBar =
+          selectedEntries.length === 0
+            ? null
+            : h(
+                'div',
+                { className: 'dsh-trash__batch', key: 'batch', role: 'region', 'aria-label': format(t('selectedCount'), { count: selectedEntries.length }) },
+                h('span', { className: 'dsh-trash__batchCount' }, format(t('selectedCount'), { count: selectedEntries.length })),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dsh-trash__button',
+                    onClick: () => {
+                      void performBatchRestore()
+                    },
+                    disabled: loading || mutationBusy || corrupt,
+                  },
+                  batchRestoring ? t('batchRestoring') : t('batchRestore'),
+                ),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dsh-trash__button',
+                    onClick: clearSelection,
+                    disabled: batchRestoring,
+                  },
+                  t('clearSelection'),
                 ),
               )
 
@@ -2259,6 +2569,16 @@ window.__ModuleLoader__.load({
               return h(
                 'li',
                 { className: 'dsh-trash__row', key: entry.sessionId, 'aria-busy': rowBusy ? 'true' : 'false' },
+                isSelectable(entry)
+                  ? h('input', {
+                      type: 'checkbox',
+                      className: 'dsh-trash__rowCheck',
+                      checked: selectedIds.has(entry.sessionId),
+                      'aria-label': format(t('selectRow'), { title }),
+                      disabled: rowBusy || mutationBusy || corrupt || loading,
+                      onChange: () => toggleSelected(entry.sessionId),
+                    })
+                  : null,
                 h(
                   'div',
                   { className: 'dsh-trash__rowMain' },
@@ -2293,6 +2613,41 @@ window.__ModuleLoader__.load({
                     h('span', { className: 'dsh-trash__dot', 'aria-hidden': true }, '·'),
                     h('span', null, formatBytes(entry.sizeBytes)),
                   ),
+                  entry.subagentCount > 0
+                    ? h(
+                        'div',
+                        { className: 'dsh-trash__membersWrap' },
+                        h(
+                          'button',
+                          {
+                            type: 'button',
+                            className: 'dsh-trash__membersToggle',
+                            'aria-expanded': expandedRows.has(entry.sessionId) ? 'true' : 'false',
+                            onClick: () => toggleExpanded(entry.sessionId),
+                          },
+                          expandedRows.has(entry.sessionId) ? t('collapseMembers') : t('expandMembers'),
+                        ),
+                        expandedRows.has(entry.sessionId)
+                          ? h(
+                              'ul',
+                              { className: 'dsh-trash__members' },
+                              (Array.isArray(entry.members) ? entry.members : []).map((member) =>
+                                h(
+                                  'li',
+                                  { className: 'dsh-trash__member', key: member.sessionId },
+                                  h(
+                                    'span',
+                                    { className: 'dsh-trash__memberKind' },
+                                    member.origin === 'subagent' ? t('memberSubagent') : t('memberParent'),
+                                  ),
+                                  h('code', { className: 'dsh-trash__memberId' }, member.sessionId),
+                                  h('span', { className: 'dsh-trash__memberSize' }, formatBytes(member.sizeBytes)),
+                                ),
+                              ),
+                            )
+                          : null,
+                      )
+                    : null,
                   error !== null && error !== undefined && error !== ''
                     ? h(
                         'div',
@@ -2418,6 +2773,7 @@ window.__ModuleLoader__.load({
           banners,
           toolbar,
           controls,
+          batchBar,
           panel,
           footnote,
           h('div', { className: 'dsh-trash__srOnly', role: 'status', 'aria-live': 'polite' }, announcement),

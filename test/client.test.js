@@ -387,3 +387,35 @@ test('a failed move and a missing workspace report localized errors', async () =
   assert.equal(client.toasts.at(-1).success, false)
   assert.equal(client.toasts.at(-1).text, '原工作区目录已不存在，暂时无法普通恢复。')
 })
+
+test('a successful mutation broadcasts a revision to other windows', async () => {
+  const exported = await loadClientModule()
+  const instances = []
+  class FakeChannel {
+    constructor(name) {
+      this.name = name
+      this.posted = []
+      this.listeners = []
+      instances.push(this)
+    }
+    addEventListener(type, callback) {
+      if (type === 'message') this.listeners.push(callback)
+    }
+    postMessage(data) {
+      this.posted.push(data)
+    }
+    close() {}
+  }
+  globalThis.window.BroadcastChannel = FakeChannel
+  const client = createClient()
+  exported.apply(client.ctx)
+  stubFetch({
+    [PREFLIGHT]: { body: { eligible: true } },
+    [TRASH]: { body: { ok: true, entry: { sessionId: 'session-a', title: 'Alpha' } } },
+  })
+  const actions = await client.menus[0].resolve({ sessionId: 'session-a', displayTitle: 'Alpha' })
+  await actions[0].run()
+  assert.equal(instances.length, 1)
+  assert.equal(instances[0].name, 'dsh-session-trash/revision')
+  assert.deepEqual(instances[0].posted, [{ type: 'revision' }])
+})

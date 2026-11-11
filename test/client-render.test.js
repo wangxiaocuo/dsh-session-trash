@@ -314,6 +314,20 @@ function buttonWithin(node, label) {
   return found
 }
 
+/**
+ * @param {object} tree rendered tree.
+ * @param {string} label accessible name carried in `aria-label`.
+ * @returns {object | undefined} the matching select element.
+ */
+function selectByLabel(tree, label) {
+  let found
+  walk(tree, (element) => {
+    if (found !== undefined) return
+    if (element.type === 'select' && element.props['aria-label'] === label) found = element
+  })
+  return found
+}
+
 const STATE_ROUTE = '/plugins/dsh-session-trash/api/state'
 const PREFLIGHT_ROUTE = '/plugins/dsh-session-trash/api/preflight'
 const TRASH_ROUTE = '/plugins/dsh-session-trash/api/trash'
@@ -1406,4 +1420,136 @@ test('a LOCKED write is retried once before reporting success', async () => {
   assert.equal(client.calls.filter((entry) => entry.pathname === RESTORE_ROUTE).length, 2)
   assert.equal(client.toasts.at(-1).text, '已恢复「Alpha」')
   assert.equal(client.toasts.at(-1).success, true)
+})
+
+test('the list can be sorted by title, size, and expiry', async () => {
+  const { factory, mini } = await loadModule()
+  const now = Date.now()
+  const payload = statePayloadWith([
+    makeEntry({ sessionId: 'session-beta', title: 'Beta', trashedAt: now - 1000, sizeBytes: 50, expiresAt: now + 30 * DAY }),
+    makeEntry({ sessionId: 'session-alpha', title: 'Alpha', trashedAt: now - 2000, sizeBytes: 500, expiresAt: now + 10 * DAY }),
+    makeEntry({ sessionId: 'session-gamma', title: 'Gamma', trashedAt: now - 3000, sizeBytes: 5, expiresAt: now + 20 * DAY }),
+  ])
+  const client = createClient(factory, mini, payload)
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  let tree = await mini.settle(section.component)
+  assert.deepEqual(rowTitles(tree), ['Beta', 'Alpha', 'Gamma'])
+
+  const sort = selectByLabel(tree, '排序方式')
+  assert.ok(sort !== undefined)
+  sort.props.onChange({ target: { value: 'title' } })
+  tree = await mini.settle(section.component)
+  assert.deepEqual(rowTitles(tree), ['Alpha', 'Beta', 'Gamma'])
+
+  selectByLabel(tree, '排序方式').props.onChange({ target: { value: 'size' } })
+  tree = await mini.settle(section.component)
+  assert.deepEqual(rowTitles(tree), ['Alpha', 'Beta', 'Gamma'])
+
+  selectByLabel(tree, '排序方式').props.onChange({ target: { value: 'expires' } })
+  tree = await mini.settle(section.component)
+  assert.deepEqual(rowTitles(tree), ['Alpha', 'Gamma', 'Beta'])
+})
+
+test('rows can be selected and restored as a batch', async () => {
+  const { factory, mini } = await loadModule()
+  const payload = statePayloadWith([
+    makeEntry({ sessionId: 'session-alpha', title: 'Alpha' }),
+    makeEntry({ sessionId: 'session-beta', title: 'Beta' }),
+  ])
+  const client = createClient(factory, mini, payload, {
+    [RESTORE_ROUTE]: { status: 200, body: { ok: true, session: { sessionId: 'session-alpha', title: 'Alpha' } } },
+  })
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  let tree = await mini.settle(section.component)
+
+  const alphaCheck = inputByLabel(tree, '选择「Alpha」')
+  assert.ok(alphaCheck !== undefined)
+  alphaCheck.props.onChange({ target: { checked: true } })
+  tree = await mini.settle(section.component)
+  assert.ok(textOf(tree).some((value) => value.includes('已选择 1 个会话')))
+  assert.ok(buttonByText(tree, '恢复选中') !== undefined)
+
+  buttonByText(tree, '恢复选中').props.onClick()
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  const calls = client.calls.filter((entry) => entry.pathname === RESTORE_ROUTE)
+  assert.equal(calls.length, 1)
+  assert.deepEqual(JSON.parse(calls[0].options.body), { sessionId: 'session-alpha', mode: 'normal' })
+  assert.equal(client.toasts.at(-1).text, '已恢复 1 个会话')
+  assert.equal(client.toasts.at(-1).success, true)
+
+  tree = await mini.settle(section.component)
+  assert.equal(textOf(tree).some((value) => value.includes('已选择')), false)
+
+  // Select-all covers every selectable row on the page.
+  inputByLabel(tree, '全选本页可选会话').props.onChange({ target: { checked: true } })
+  tree = await mini.settle(section.component)
+  assert.ok(textOf(tree).some((value) => value.includes('已选择 2 个会话')))
+  buttonByText(tree, '取消选择').props.onClick()
+  tree = await mini.settle(section.component)
+  assert.equal(textOf(tree).some((value) => value.includes('已选择')), false)
+})
+
+test('rows whose workspace is gone are not part of a batch selection', async () => {
+  const { factory, mini } = await loadModule()
+  const payload = statePayload({ workspaceNowExists: false, requiresOrphanRestore: true })
+  const client = createClient(factory, mini, payload)
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+  assert.equal(inputByLabel(tree, '选择「Alpha」'), undefined)
+  const selectAll = inputByLabel(tree, '全选本页可选会话')
+  assert.equal(selectAll.props.disabled, true)
+})
+
+test('a sub-session row expands into its member list', async () => {
+  const { factory, mini } = await loadModule()
+  const payload = statePayloadWith([
+    makeEntry({
+      sessionId: 'session-parent',
+      title: 'Parent',
+      subagentCount: 1,
+      members: [
+        { sessionId: 'session-parent', origin: null, sizeBytes: 1024 },
+        { sessionId: 'session-parent-child', origin: 'subagent', sizeBytes: 512 },
+      ],
+    }),
+  ])
+  const client = createClient(factory, mini, payload)
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  let tree = await mini.settle(section.component)
+  assert.ok(buttonByText(tree, '展开子会话') !== undefined)
+  assert.equal(textOf(tree).some((value) => value.includes('session-parent-child')), false)
+
+  buttonByText(tree, '展开子会话').props.onClick()
+  tree = await mini.settle(section.component)
+  assert.ok(textOf(tree).some((value) => value.includes('session-parent-child')))
+  assert.ok(buttonByText(tree, '收起子会话') !== undefined)
+})
+
+test('a revision from another window reloads the trash list', async () => {
+  const { factory, mini } = await loadModule()
+  const instances = []
+  class FakeChannel {
+    constructor(name) {
+      this.name = name
+      this.listeners = []
+      this.posted = []
+      instances.push(this)
+    }
+    addEventListener(type, callback) {
+      if (type === 'message') this.listeners.push(callback)
+    }
+    postMessage(data) {
+      this.posted.push(data)
+    }
+    close() {}
+  }
+  globalThis.window.BroadcastChannel = FakeChannel
+  const client = createClient(factory, mini, statePayload())
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  await mini.settle(section.component)
+  assert.equal(instances.length, 1)
+  const before = client.calls.filter((entry) => entry.pathname === STATE_ROUTE).length
+  instances[0].listeners[0]({ data: { type: 'revision' } })
+  await mini.settle(section.component)
+  assert.equal(client.calls.filter((entry) => entry.pathname === STATE_ROUTE).length, before + 1)
 })
