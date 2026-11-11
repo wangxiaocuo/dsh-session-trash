@@ -6,7 +6,7 @@
 
 A session trash for DeepSeek Harness. Move cold sessions out of the sidebar without deleting their logs, restore them within the retention window, or delete the logs permanently. Built for DSH 0.2.2-rc.1 on Desktop and Web. Host and Client ship in one package, with no build step.
 
-Status: feature complete. CI (GitHub Actions) runs the unit and Host smoke tests on Ubuntu (Node 20/22) and Windows (Node 22); macOS has run the end-to-end suite against a real DSH Host. The Windows and Linux DSH Hosts have not been verified manually yet, and Windows skips the cases that rely on POSIX permission bits.
+Status: feature complete. CI (GitHub Actions) runs the unit tests, the Host smoke test, and the real `dsh web` end-to-end suite on Ubuntu (Node 20/22) and Windows (Node 22), booting the Host from an npm-installed DSH runtime; macOS also ran the suite against the real desktop Host manually. Windows skips the cases that rely on POSIX permission bits.
 
 ## Features
 
@@ -167,7 +167,7 @@ The index schema is v2; a v1 index is upgraded automatically on startup and pres
 - Permanent deletion removes the session log only. Attachments, images, projection-cache rows, and search-index rows are not deleted.
 - `/state` returns all entry summaries in one response. Search, filtering, and paging happen in the Client.
 - There is no cross-window live push. Another window's change appears after a refresh or when the window regains focus.
-- The Windows and Linux DSH Hosts have not been verified manually; CI covers unit and Host smoke tests only. On Windows, cases that rely on POSIX permission bits are skipped, and long paths over 260 characters / symlink copying depend on system configuration (the related tests skip themselves when unsupported).
+- The desktop apps on Windows and Linux have not been verified manually; CI boots an npm-installed `dsh web` Host, so desktop-shell UI and desktop-only features (such as reveal in the file manager) are still verified on macOS only. On Windows, cases that rely on POSIX permission bits are skipped, and long paths over 260 characters / symlink copying depend on system configuration (the related tests skip themselves when unsupported).
 - macOS path comparison is case-insensitive. On a case-sensitive APFS volume, paths that differ only by case are treated as the same location.
 - Multiple DSH processes sharing one `DSH_HOME` serialize trash operations through `.lock`. A process paused for more than 10 minutes can lose the lock to another process.
 
@@ -177,7 +177,7 @@ The index schema is v2; a v1 index is upgraded automatically on startup and pres
 pnpm install
 pnpm test          # unit tests
 pnpm test:smoke    # Host smoke test (real Cordis, plain Node)
-npm run test:e2e   # real dsh web end-to-end (needs the desktop app)
+npm run test:e2e   # real dsh web end-to-end (desktop app or npm-installed DSH)
 ```
 
 The Host smoke test wires the plugin into a real Cordis context through the `@deepseek-ai/cordis` devDependency, creates its own temporary `DSH_HOME`, and removes it afterwards; it does not need the desktop app. Set `DSH_SMOKE_KEEP=1` to keep the temporary home for debugging. `pnpm test` enumerates the test files through `test/run-unit.mjs`, so it does not depend on shell glob expansion and behaves the same on Windows and POSIX shells.
@@ -188,9 +188,10 @@ What CI verifies:
 |---|---|
 | Unit tests, Host smoke test | CI: Ubuntu Node 20/22, Windows Node 22 |
 | Package contents (`npm pack`) | CI: Ubuntu |
-| Real `dsh web` end to end | macOS + DSH 0.2.2-rc.1 (run manually) |
+| Real `dsh web` end to end (npm-installed DSH) | CI: Ubuntu, Windows (Node 22) |
+| Real `dsh web` end to end (desktop app) | macOS + DSH 0.2.2-rc.1 (run manually) |
 
-`npm run test:e2e` boots a real `dsh web` Host in a temporary `DSH_HOME` and runs the full flow. It discovers the desktop app in the platform's usual install locations, or uses `DSH_ELECTRON`; when no desktop app is found it prints a skip message and exits 0. The cleanup-failure scenario that relies on POSIX permission bits is skipped on Windows. Set `DSH_E2E_KEEP=1` to keep the temporary home and logs.
+`npm run test:e2e` boots a real `dsh web` Host in a temporary `DSH_HOME` and runs the full flow. By default it discovers the desktop app in the platform's usual install locations (or uses `DSH_ELECTRON`); set `DSH_E2E_DSH_BIN` to the `lib/bin.js` of an npm-installed `@deepseek-ai/dsh` to boot the Host with plain Node instead - CI and Linux/Windows use that mode, with no desktop app required. When no Host is found it prints a skip message and exits 0. The cleanup-failure scenario that relies on POSIX permission bits is skipped on Windows. Set `DSH_E2E_KEEP=1` to keep the temporary home and logs.
 
 Project layout:
 

@@ -2,6 +2,13 @@
 
 本文件记录这个插件的所有重要变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Added
+
+- e2e 支持 `DSH_E2E_DSH_BIN` 启动 npm 安装的 `@deepseek-ai/dsh` web Host，不再依赖桌面版；Linux/Windows 也能跑真实 Host 端到端测试。
+- CI 新增真实 Host e2e job（Ubuntu + Windows），失败时输出 check annotations。
+
 ## [0.6.3] - 2026-11-11
 
 ### Added
