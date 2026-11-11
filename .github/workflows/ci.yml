@@ -1,18 +1,17 @@
 # Unit tests, host smoke test, coverage, and package contents.
 #
-# The real-desktop end-to-end suite (`pnpm test:e2e`) is intentionally not part
-# of CI: it spawns an installed DeepSeek Harness desktop app and only runs on a
-# machine that has one. Run it manually (or on a self-hosted runner with the
-# desktop installed) before a release.
+# Windows runs on Node 22 only: it is the smallest useful cross-platform signal,
+# while Ubuntu keeps the Node 20/22 compatibility matrix. Platform-specific
+# cases (POSIX permission bits, symbolic links) either inject a seam or skip
+# with an explicit reason on Windows.
 #
-# A Windows job is not enabled yet: several tests create symlinks and rely on
-# POSIX permission bits to simulate sharing violations, which needs a
-# portability pass first.
+# The real-desktop end-to-end suite (`pnpm test:e2e`) is intentionally not part
+# of CI: it spawns an installed DeepSeek Harness desktop app. Run it manually
+# (or on a self-hosted runner with the desktop installed) before a release.
 name: CI
 
 on:
   push:
-    branches: [main]
   pull_request:
 
 permissions:
@@ -24,12 +23,18 @@ concurrency:
 
 jobs:
   test:
-    name: unit + smoke (node ${{ matrix.node }})
-    runs-on: ubuntu-latest
+    name: unit + smoke (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        node: [20, 22]
+        include:
+          - os: ubuntu-latest
+            node: 20
+          - os: ubuntu-latest
+            node: 22
+          - os: windows-latest
+            node: 22
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
