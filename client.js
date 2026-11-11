@@ -10,6 +10,10 @@ window.__ModuleLoader__.load({
     const MENU_ID = 'session-trash.move'
     const SECTION_ID = 'session-trash'
     const PREFLIGHT_TIMEOUT_MS = 800
+    /** Hard budget for one trash write request. */
+    const MUTATION_TIMEOUT_MS = 30_000
+    /** Hard budget for one `/state` read. */
+    const STATE_TIMEOUT_MS = 15_000
     const DAY_MS = 86_400_000
     /** Rows per page in the trash list. */
     const PAGE_SIZE = 50
@@ -101,6 +105,7 @@ window.__ModuleLoader__.load({
       emptyBody: '在侧边栏右键会话，选择「移入回收站」。',
       loading: '正在加载…',
       errorNetwork: '无法连接到回收站服务。',
+      errorTimeout: '请求超时，请重试。',
       errorUnauthorized: '连接已失效，请刷新页面。',
       errorForbidden: '当前身份无权访问回收站。',
       errorGeneric: '回收站加载失败。',
@@ -238,6 +243,7 @@ window.__ModuleLoader__.load({
       emptyBody: 'Right-click a session in the sidebar and choose “Move to trash”.',
       loading: 'Loading…',
       errorNetwork: 'Could not reach the trash service.',
+      errorTimeout: 'The request timed out. Try again.',
       errorUnauthorized: 'Your connection expired. Reload the page.',
       errorForbidden: 'You do not have access to the trash.',
       errorGeneric: 'Could not load the trash.',
@@ -809,6 +815,12 @@ window.__ModuleLoader__.load({
       const buttonRef = React.useRef(null)
       const menuRef = React.useRef(null)
 
+      // A pending write disables the trigger; closing the open menu prevents a
+      // stale item from starting a second mutation.
+      React.useEffect(() => {
+        if (disabled === true) setOpen(false)
+      }, [disabled])
+
       React.useEffect(() => {
         if (!open) return undefined
         const onPointerDown = (event) => {
@@ -846,6 +858,7 @@ window.__ModuleLoader__.load({
        * @returns {void}
        */
       const toggleMenu = () => {
+        if (disabled === true) return
         if (open) {
           setOpen(false)
           return
@@ -1070,7 +1083,7 @@ window.__ModuleLoader__.load({
         useLocaleRevision(ctx.locale)
         const locale = activeLocale(ctx.locale)
         const [view, setView] = React.useState({ status: 'loading', data: null, error: null })
-        const [busyId, setBusyId] = React.useState(null)
+        const [pendingRows, setPendingRows] = React.useState(() => new Set())
         const [rowErrors, setRowErrors] = React.useState({})
         const [dialog, setDialog] = React.useState(null)
         const [cleaning, setCleaning] = React.useState(false)
@@ -1083,12 +1096,131 @@ window.__ModuleLoader__.load({
         const abortRef = React.useRef(null)
         const searchRef = React.useRef(null)
         const panelRef = React.useRef(null)
+        /** False once the section unmounts, so late responses stay silent. */
+        const aliveRef = React.useRef(true)
+        /** Number of writes in flight; the section allows only one at a time. */
+        const activeWritesRef = React.useRef(0)
+        /** Abort scopes of in-flight writes, all cancelled on unmount. */
+        const writeScopesRef = React.useRef(new Set())
         const closeDialog = React.useCallback(() => setDialog(null), [])
+
+        /**
+         * Claim the single write slot. A second click while one mutation is in
+         * flight is ignored, so two rows can never race the Host lock.
+         *
+         * @returns {boolean} whether the write may proceed.
+         */
+        function beginWrite() {
+          if (!aliveRef.current || activeWritesRef.current > 0) return false
+          activeWritesRef.current += 1
+          return true
+        }
+
+        /**
+         * @returns {void}
+         */
+        function endWrite() {
+          activeWritesRef.current = Math.max(0, activeWritesRef.current - 1)
+        }
+
+        /**
+         * @param {string} sessionId row whose write is now pending.
+         * @returns {void}
+         */
+        function markRowPending(sessionId) {
+          setPendingRows((previous) => {
+            if (previous.has(sessionId)) return previous
+            const next = new Set(previous)
+            next.add(sessionId)
+            return next
+          })
+        }
+
+        /**
+         * @param {string} sessionId row whose write settled.
+         * @returns {void}
+         */
+        function clearRowPending(sessionId) {
+          setPendingRows((previous) => {
+            if (!previous.has(sessionId)) return previous
+            const next = new Set(previous)
+            next.delete(sessionId)
+            return next
+          })
+        }
+
+        /**
+         * Open an abort scope for one write. It is cancelled by a hard timeout
+         * and by the unmount cleanup, so a stuck request can never wedge the
+         * page or outlive the settings section.
+         *
+         * @returns {{ signal: AbortSignal, timedOut: () => boolean, aborted: () => boolean, cancel: () => void, close: () => void }} the scope.
+         */
+        function openWriteScope() {
+          const controller = new AbortController()
+          let timedOut = false
+          const timer = setTimeout(() => {
+            timedOut = true
+            controller.abort()
+          }, MUTATION_TIMEOUT_MS)
+          const scope = {
+            signal: controller.signal,
+            timedOut: () => timedOut,
+            aborted: () => controller.signal.aborted,
+            cancel: () => controller.abort(),
+            close: () => {
+              clearTimeout(timer)
+              writeScopesRef.current.delete(scope)
+            },
+          }
+          writeScopesRef.current.add(scope)
+          return scope
+        }
+
+        /**
+         * Send one write request, returning a discriminated transport outcome
+         * instead of throwing, so every caller localizes failures the same way.
+         *
+         * @param {string} pathname endpoint below the API prefix.
+         * @param {object} [body] JSON request body.
+         * @returns {Promise<
+         *   | { kind: 'response', status: number, ok: boolean, payload: any }
+         *   | { kind: 'timeout' }
+         *   | { kind: 'cancelled' }
+         *   | { kind: 'network' }
+         * >} the outcome.
+         */
+        async function sendMutation(pathname, body) {
+          const scope = openWriteScope()
+          try {
+            const { status, ok, payload } = await requestJson(pathname, { method: 'POST', body, signal: scope.signal })
+            return { kind: 'response', status, ok, payload }
+          } catch {
+            if (scope.timedOut()) return { kind: 'timeout' }
+            if (scope.aborted()) return { kind: 'cancelled' }
+            return { kind: 'network' }
+          } finally {
+            scope.close()
+          }
+        }
+
+        /**
+         * @param {'timeout' | 'network'} kind transport failure.
+         * @returns {string} the localized message to show.
+         */
+        function transportMessage(kind) {
+          return kind === 'timeout' ? t('errorTimeout') : t('errorNetwork')
+        }
 
         const load = React.useCallback(() => {
           if (abortRef.current !== null) abortRef.current.abort()
           const controller = new AbortController()
           abortRef.current = controller
+          let timedOut = false
+          const timer = setTimeout(() => {
+            timedOut = true
+            controller.abort()
+          }, STATE_TIMEOUT_MS)
           setView((previous) => ({
             status: previous.data === null ? 'loading' : 'refreshing',
             data: previous.data,
@@ -1109,9 +1241,15 @@ window.__ModuleLoader__.load({
               setRowErrors({})
             })
             .catch(() => {
-              if (controller.signal.aborted) return
+              if (controller.signal.aborted) {
+                if (timedOut) {
+                  setView((previous) => ({ status: 'error', data: previous.data, error: t('errorTimeout') }))
+                }
+                return
+              }
               setView((previous) => ({ status: 'error', data: previous.data, error: t('errorNetwork') }))
             })
+            .finally(() => clearTimeout(timer))
         }, [])
 
         React.useEffect(() => {
@@ -1122,6 +1260,15 @@ window.__ModuleLoader__.load({
         }, [load])
 
         React.useEffect(() => subscribeRevision(load), [load])
+
+        React.useEffect(
+          () => () => {
+            aliveRef.current = false
+            for (const scope of [...writeScopesRef.current]) scope.cancel()
+            writeScopesRef.current.clear()
+          },
+          [],
+        )
 
         React.useEffect(() => {
           const refresh = () => load()
@@ -1167,7 +1314,12 @@ window.__ModuleLoader__.load({
           cleanupInfo.lastRun.error !== ''
             ? cleanupInfo.lastRun.error
             : null
-        const busy = view.status === 'loading' || view.status === 'refreshing'
+        const loading = view.status === 'loading'
+        const refreshing = view.status === 'refreshing'
+        const readsBusy = loading || refreshing
+        const pendingCount = pendingRows.size + (cleaning ? 1 : 0) + (purgingAll ? 1 : 0) + (rebuilding ? 1 : 0)
+        /** Any write (row action or maintenance) is in flight. */
+        const mutationBusy = pendingCount > 0
         const corrupt = data !== null && data.index !== undefined && data.index.status === 'corrupt'
         const recovered = data !== null && data.index !== undefined && data.index.status === 'recovered'
         const unindexed = data !== null && data.index !== undefined && typeof data.index.unindexed === 'number' ? data.index.unindexed : 0
@@ -1265,22 +1417,28 @@ window.__ModuleLoader__.load({
          * @returns {Promise<void>} completion of the operation.
          */
         async function performRestore(entry, mode) {
-          setBusyId(entry.sessionId)
+          if (!beginWrite()) return
+          markRowPending(entry.sessionId)
           try {
-            const { status, ok, payload } = await requestJson('restore', {
-              method: 'POST',
-              body: { sessionId: entry.sessionId, mode },
-            })
-            if (!ok) {
-              const code = payload !== null && payload !== undefined && payload.error !== undefined ? payload.error.code : undefined
+            const outcome = await sendMutation('restore', { sessionId: entry.sessionId, mode })
+            if (!aliveRef.current || outcome.kind === 'cancelled') return
+            if (outcome.kind !== 'response') {
+              fail(entry, transportMessage(outcome.kind))
+              return
+            }
+            if (!outcome.ok) {
+              const code =
+                outcome.payload !== null && outcome.payload !== undefined && outcome.payload.error !== undefined
+                  ? outcome.payload.error.code
+                  : undefined
               if (mode === 'normal' && code === 'WORKSPACE_MISSING') {
                 setDialog({ kind: 'orphan', entry })
                 return
               }
-              fail(entry, describeActionFailure(status, payload, t))
+              fail(entry, describeActionFailure(outcome.status, outcome.payload, t))
               return
             }
-            const session = payload !== null && payload !== undefined ? payload.session : undefined
+            const session = outcome.payload !== null && outcome.payload !== undefined ? outcome.payload.session : undefined
             const orphan = session !== null && session !== undefined ? session.orphan === true : mode === 'orphan'
             const title =
               session !== null && session !== undefined && typeof session.title === 'string' && session.title !== ''
@@ -1290,10 +1448,9 @@ window.__ModuleLoader__.load({
             bumpRevision()
             ctx.contextMenus.notify(message, true)
             announce(message)
-          } catch {
-            fail(entry, t('errorNetwork'))
           } finally {
-            setBusyId(null)
+            endWrite()
+            if (aliveRef.current) clearRowPending(entry.sessionId)
           }
         }
 
@@ -1302,24 +1459,26 @@ window.__ModuleLoader__.load({
          * @returns {Promise<void>} completion of the operation.
          */
         async function performPurge(entry) {
-          setBusyId(entry.sessionId)
+          if (!beginWrite()) return
+          markRowPending(entry.sessionId)
           try {
-            const { status, ok, payload } = await requestJson('purge', {
-              method: 'POST',
-              body: { sessionId: entry.sessionId },
-            })
-            if (!ok) {
-              fail(entry, describeActionFailure(status, payload, t))
+            const outcome = await sendMutation('purge', { sessionId: entry.sessionId })
+            if (!aliveRef.current || outcome.kind === 'cancelled') return
+            if (outcome.kind !== 'response') {
+              fail(entry, transportMessage(outcome.kind))
+              return
+            }
+            if (!outcome.ok) {
+              fail(entry, describeActionFailure(outcome.status, outcome.payload, t))
               return
             }
             const message = format(t('purgeSuccess'), { title: entry.title })
             bumpRevision()
             ctx.contextMenus.notify(message, true)
             announce(message)
-          } catch {
-            fail(entry, t('errorNetwork'))
           } finally {
-            setBusyId(null)
+            endWrite()
+            if (aliveRef.current) clearRowPending(entry.sessionId)
           }
         }
 
@@ -1328,23 +1487,25 @@ window.__ModuleLoader__.load({
          * @returns {Promise<void>} completion of the operation.
          */
         async function performForget(entry) {
-          setBusyId(entry.sessionId)
+          if (!beginWrite()) return
+          markRowPending(entry.sessionId)
           try {
-            const { status, ok, payload } = await requestJson('forget', {
-              method: 'POST',
-              body: { sessionId: entry.sessionId },
-            })
-            if (!ok) {
-              fail(entry, describeActionFailure(status, payload, t))
+            const outcome = await sendMutation('forget', { sessionId: entry.sessionId })
+            if (!aliveRef.current || outcome.kind === 'cancelled') return
+            if (outcome.kind !== 'response') {
+              fail(entry, transportMessage(outcome.kind))
+              return
+            }
+            if (!outcome.ok) {
+              fail(entry, describeActionFailure(outcome.status, outcome.payload, t))
               return
             }
             bumpRevision()
             ctx.contextMenus.notify(t('forgetSuccess'), true)
             announce(t('forgetSuccess'))
-          } catch {
-            fail(entry, t('errorNetwork'))
           } finally {
-            setBusyId(null)
+            endWrite()
+            if (aliveRef.current) clearRowPending(entry.sessionId)
           }
         }
 
@@ -1353,23 +1514,24 @@ window.__ModuleLoader__.load({
          * @returns {Promise<void>} completion of the operation.
          */
         async function performReveal(entry) {
-          setBusyId(entry.sessionId)
+          if (!beginWrite()) return
+          markRowPending(entry.sessionId)
           try {
-            const { status, ok, payload } = await requestJson('reveal', {
-              method: 'POST',
-              body: { sessionId: entry.sessionId },
-            })
-            if (!ok) {
-              const message = describeActionFailure(status, payload, t) || t('revealFailed')
-              fail(entry, message)
+            const outcome = await sendMutation('reveal', { sessionId: entry.sessionId })
+            if (!aliveRef.current || outcome.kind === 'cancelled') return
+            if (outcome.kind !== 'response') {
+              fail(entry, transportMessage(outcome.kind))
+              return
+            }
+            if (!outcome.ok) {
+              fail(entry, describeActionFailure(outcome.status, outcome.payload, t))
               return
             }
             ctx.contextMenus.notify(t('revealSuccess'), true)
             announce(t('revealSuccess'))
-          } catch {
-            fail(entry, t('errorNetwork'))
           } finally {
-            setBusyId(null)
+            endWrite()
+            if (aliveRef.current) clearRowPending(entry.sessionId)
           }
         }
 
@@ -1379,6 +1541,7 @@ window.__ModuleLoader__.load({
          */
         async function performCopy(entry) {
           const copied = await copyText(entry.sessionId)
+          if (!aliveRef.current) return
           ctx.contextMenus.notify(copied ? t('copySuccess') : t('copyFailed'), copied)
           announce(copied ? t('copySuccess') : t('copyFailed'))
         }
@@ -1387,22 +1550,30 @@ window.__ModuleLoader__.load({
          * @returns {Promise<void>} completion of the operation.
          */
         async function runCleanup() {
+          if (!beginWrite()) return
           setCleaning(true)
           try {
-            const { status, ok, payload } = await requestJson('cleanup', { method: 'POST' })
-            if (!ok) {
-              ctx.contextMenus.notify(describeActionFailure(status, payload, t), false)
+            const outcome = await sendMutation('cleanup')
+            if (!aliveRef.current || outcome.kind === 'cancelled') return
+            if (outcome.kind !== 'response') {
+              ctx.contextMenus.notify(transportMessage(outcome.kind), false)
               return
             }
-            const purged = payload !== null && payload !== undefined && typeof payload.purged === 'number' ? payload.purged : 0
+            if (!outcome.ok) {
+              ctx.contextMenus.notify(describeActionFailure(outcome.status, outcome.payload, t), false)
+              return
+            }
+            const purged =
+              outcome.payload !== null && outcome.payload !== undefined && typeof outcome.payload.purged === 'number'
+                ? outcome.payload.purged
+                : 0
             const message = purged > 0 ? format(t('cleanupDone'), { count: purged }) : t('cleanupNone')
             bumpRevision()
             ctx.contextMenus.notify(message, true)
             announce(message)
-          } catch {
-            ctx.contextMenus.notify(t('errorNetwork'), false)
           } finally {
-            setCleaning(false)
+            endWrite()
+            if (aliveRef.current) setCleaning(false)
           }
         }
 
@@ -1412,13 +1583,20 @@ window.__ModuleLoader__.load({
          * @returns {Promise<void>} completion of the operation.
          */
         async function performPurgeAll() {
+          if (!beginWrite()) return
           setPurgingAll(true)
           try {
-            const { status, ok, payload } = await requestJson('purge-all', { method: 'POST' })
-            if (!ok) {
-              ctx.contextMenus.notify(describeActionFailure(status, payload, t), false)
+            const outcome = await sendMutation('purge-all')
+            if (!aliveRef.current || outcome.kind === 'cancelled') return
+            if (outcome.kind !== 'response') {
+              ctx.contextMenus.notify(transportMessage(outcome.kind), false)
               return
             }
+            if (!outcome.ok) {
+              ctx.contextMenus.notify(describeActionFailure(outcome.status, outcome.payload, t), false)
+              return
+            }
+            const payload = outcome.payload
             const purged = payload !== null && payload !== undefined && typeof payload.purged === 'number' ? payload.purged : 0
             const forgotten =
               payload !== null && payload !== undefined && typeof payload.forgotten === 'number' ? payload.forgotten : 0
@@ -1433,10 +1611,9 @@ window.__ModuleLoader__.load({
             bumpRevision()
             ctx.contextMenus.notify(message, failed === 0)
             announce(message)
-          } catch {
-            ctx.contextMenus.notify(t('errorNetwork'), false)
           } finally {
-            setPurgingAll(false)
+            endWrite()
+            if (aliveRef.current) setPurgingAll(false)
           }
         }
 
@@ -1444,13 +1621,20 @@ window.__ModuleLoader__.load({
          * @returns {Promise<void>} completion of the operation.
          */
         async function runRebuild() {
+          if (!beginWrite()) return
           setRebuilding(true)
           try {
-            const { status, ok, payload } = await requestJson('rebuild', { method: 'POST' })
-            if (!ok) {
-              ctx.contextMenus.notify(describeActionFailure(status, payload, t), false)
+            const outcome = await sendMutation('rebuild')
+            if (!aliveRef.current || outcome.kind === 'cancelled') return
+            if (outcome.kind !== 'response') {
+              ctx.contextMenus.notify(transportMessage(outcome.kind), false)
               return
             }
+            if (!outcome.ok) {
+              ctx.contextMenus.notify(describeActionFailure(outcome.status, outcome.payload, t), false)
+              return
+            }
+            const payload = outcome.payload
             const count = payload !== null && payload !== undefined && typeof payload.entries === 'number' ? payload.entries : 0
             const unindexedCount =
               payload !== null && payload !== undefined && typeof payload.unindexed === 'number' ? payload.unindexed : 0
@@ -1461,10 +1645,9 @@ window.__ModuleLoader__.load({
             bumpRevision()
             ctx.contextMenus.notify(message, true)
             announce(message)
-          } catch {
-            ctx.contextMenus.notify(t('errorNetwork'), false)
           } finally {
-            setRebuilding(false)
+            endWrite()
+            if (aliveRef.current) setRebuilding(false)
           }
         }
 
@@ -1607,7 +1790,7 @@ window.__ModuleLoader__.load({
                   onClick: () => {
                     void runRebuild()
                   },
-                  disabled: rebuilding,
+                  disabled: loading || mutationBusy,
                 },
                 rebuilding ? t('rebuilding') : t('rebuild'),
               ),
@@ -1666,7 +1849,7 @@ window.__ModuleLoader__.load({
                   onClick: () => {
                     void runCleanup()
                   },
-                  disabled: busy || cleaning || corrupt,
+                  disabled: loading || mutationBusy || corrupt,
                 },
                 cleaning ? t('cleaning') : t('cleanupRetryNow'),
               ),
@@ -1716,7 +1899,7 @@ window.__ModuleLoader__.load({
                       onClick: () => {
                         void runCleanup()
                       },
-                      disabled: busy || cleaning || corrupt,
+                      disabled: loading || mutationBusy || corrupt,
                     },
                     cleaning ? t('cleaning') : t('cleanupExpired'),
                   ),
@@ -1726,8 +1909,8 @@ window.__ModuleLoader__.load({
                       type: 'button',
                       className: 'dsh-trash__button',
                       onClick: load,
-                      disabled: busy,
-                      'aria-busy': busy ? 'true' : 'false',
+                      disabled: loading || refreshing,
+                      'aria-busy': refreshing ? 'true' : 'false',
                     },
                     t('refresh'),
                   ),
@@ -1737,7 +1920,7 @@ window.__ModuleLoader__.load({
                       type: 'button',
                       className: 'dsh-trash__button dsh-trash__button--danger',
                       onClick: () => setDialog({ kind: 'purgeAll', count: entries.length }),
-                      disabled: busy || cleaning || purgingAll || corrupt || entries.length === 0,
+                      disabled: loading || mutationBusy || corrupt || entries.length === 0,
                     },
                     purgingAll ? t('purgingAll') : t('purgeAll'),
                   ),
@@ -1863,7 +2046,7 @@ window.__ModuleLoader__.load({
             'ul',
             { className: 'dsh-trash__list', 'aria-label': t('listLabel') },
             visibleEntries.map((entry) => {
-              const rowBusy = busyId === entry.sessionId
+              const rowBusy = pendingRows.has(entry.sessionId)
               const error = rowErrors[entry.sessionId] ?? entry.lastError
               const title = entry.title !== undefined && entry.title !== '' ? entry.title : entry.sessionId
               return h(
@@ -1917,7 +2100,7 @@ window.__ModuleLoader__.load({
                           type: 'button',
                           className: 'dsh-trash__button',
                           'aria-label': format(t('actionRestoreFor'), { title }),
-                          disabled: rowBusy || busy || purgingAll,
+                          disabled: rowBusy || mutationBusy || corrupt || loading,
                           onClick: () => {
                             if (entry.requiresOrphanRestore === true) setDialog({ kind: 'orphan', entry })
                             else void performRestore(entry, 'normal')
@@ -1929,7 +2112,7 @@ window.__ModuleLoader__.load({
                   h(ActionMenu, {
                     label: format(t('actionMoreFor'), { title }),
                     items: menuItemsFor(entry),
-                    disabled: rowBusy || busy || purgingAll,
+                    disabled: rowBusy || mutationBusy || corrupt || loading,
                   }),
                 ),
               )
@@ -1983,7 +2166,7 @@ window.__ModuleLoader__.load({
                   className: 'dsh-trash__panel',
                   key: 'panel',
                   ref: panelRef,
-                  'aria-busy': busy ? 'true' : 'false',
+                  'aria-busy': readsBusy ? 'true' : 'false',
                 },
                 panelBody,
                 pagination,

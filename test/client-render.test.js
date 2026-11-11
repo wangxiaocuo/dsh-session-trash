@@ -139,6 +139,19 @@ function createMiniReact() {
       }
       return tree
     },
+    /**
+     * Run every mounted effect cleanup, as unmounting the component would.
+     *
+     * @returns {void}
+     */
+    unmount() {
+      for (const entry of hooks) {
+        if (entry !== null && typeof entry === 'object' && typeof entry.cleanup === 'function') {
+          entry.cleanup()
+          entry.cleanup = null
+        }
+      }
+    },
   }
 }
 
@@ -273,6 +286,32 @@ function rowTitles(tree) {
     const title = elementByClass(row, 'dsh-trash__rowTitle')
     return title === undefined ? '' : title.children.join('')
   })
+}
+
+/**
+ * @param {object} tree rendered tree.
+ * @param {string} title row title.
+ * @returns {object | undefined} the matching row element.
+ */
+function rowByTitle(tree, title) {
+  return elementsByClass(tree, 'dsh-trash__row').find((row) => {
+    const titleNode = elementByClass(row, 'dsh-trash__rowTitle')
+    return titleNode !== undefined && titleNode.children.join('') === title
+  })
+}
+
+/**
+ * @param {object} node subtree root.
+ * @param {string} label exact button text.
+ * @returns {object | undefined} the first matching button below `node`.
+ */
+function buttonWithin(node, label) {
+  let found
+  walk(node, (element) => {
+    if (found !== undefined) return
+    if (element.type === 'button' && element.children.includes(label)) found = element
+  })
+  return found
 }
 
 const STATE_ROUTE = '/plugins/dsh-session-trash/api/state'
@@ -426,6 +465,7 @@ function createClient(factory, mini, payload, extra = {}) {
     if (pathname === STATE_ROUTE) answer = typeof payload === 'function' ? payload(calls.length) : { status: 200, body: payload }
     else if (extra[pathname] !== undefined) answer = typeof extra[pathname] === 'function' ? extra[pathname](options) : extra[pathname]
     else answer = { status: 200, body: { ok: true } }
+    answer = await answer
     return {
       ok: (answer.status ?? 200) < 400,
       status: answer.status ?? 200,
@@ -1121,4 +1161,141 @@ test('forgetting a missing record asks for confirmation and removes it', async (
   const call = client.calls.find((entry) => entry.pathname === FORGET_ROUTE)
   assert.deepEqual(JSON.parse(call.options.body), { sessionId: 'session-alpha' })
   assert.equal(client.toasts.at(-1).text, '已从回收站列表移除')
+})
+
+test('a row write blocks every other write until its own request settles', async (t) => {
+  const { factory, mini } = await loadModule()
+  const now = Date.now()
+  const payload = statePayloadWith([
+    makeEntry({ sessionId: 'session-alpha', title: 'Alpha', trashedAt: now - 1000 }),
+    makeEntry({ sessionId: 'session-beta', title: 'Beta', trashedAt: now - 2000 }),
+  ])
+  let release
+  const pending = new Promise((resolve) => {
+    release = resolve
+  })
+  t.after(() => release({ status: 500, body: { ok: false } }))
+  const client = createClient(factory, mini, payload, { [RESTORE_ROUTE]: () => pending })
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  let tree = await mini.settle(section.component)
+
+  buttonWithin(rowByTitle(tree, 'Alpha'), '恢复').props.onClick()
+  tree = await mini.settle(section.component)
+  const restoreCalls = () => client.calls.filter((entry) => entry.pathname === RESTORE_ROUTE).length
+  assert.equal(restoreCalls(), 1)
+  assert.equal(buttonWithin(rowByTitle(tree, 'Alpha'), '恢复').props.disabled, true)
+  assert.equal(buttonWithin(rowByTitle(tree, 'Beta'), '恢复').props.disabled, true)
+  const menus = actionMenus(tree)
+  assert.equal(menus[0].props.disabled, true)
+  assert.equal(buttonByText(tree, '清理已过期').props.disabled, true)
+  assert.equal(buttonByText(tree, '永久删除全部').props.disabled, true)
+
+  // A programmatic second click must be ignored instead of racing the Host lock.
+  buttonWithin(rowByTitle(tree, 'Beta'), '恢复').props.onClick()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(restoreCalls(), 1)
+  assert.equal(client.toasts.length, 0)
+
+  release({ status: 200, body: { ok: true, session: { sessionId: 'session-alpha', title: 'Alpha', orphan: false } } })
+  tree = await mini.settle(section.component)
+  assert.equal(client.toasts.at(-1).text, '已恢复「Alpha」')
+  assert.equal(client.toasts.at(-1).success, true)
+  // The pending gate belongs to the finished request, so both rows recover.
+  assert.equal(buttonWithin(rowByTitle(tree, 'Alpha'), '恢复').props.disabled, false)
+  assert.equal(buttonWithin(rowByTitle(tree, 'Beta'), '恢复').props.disabled, false)
+})
+
+test('protection mode blocks row writes but keeps the rebuild action available', async () => {
+  const { factory, mini } = await loadModule()
+  const payload = statePayload()
+  payload.index = { status: 'corrupt', updatedAt: 1, error: 'broken', unindexed: 0 }
+  const client = createClient(factory, mini, payload)
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+  assert.equal(buttonWithin(rowByTitle(tree, 'Alpha'), '恢复').props.disabled, true)
+  assert.equal(actionMenus(tree)[0].props.disabled, true)
+  assert.equal(buttonByText(tree, '清理已过期').props.disabled, true)
+  assert.equal(buttonByText(tree, '永久删除全部').props.disabled, true)
+  assert.equal(buttonByText(tree, '尝试重建索引').props.disabled, false)
+})
+
+test('a maintenance write disables the other maintenance actions', async (t) => {
+  const { factory, mini } = await loadModule()
+  let release
+  const pending = new Promise((resolve) => {
+    release = resolve
+  })
+  t.after(() => release({ status: 500, body: { ok: false } }))
+  const client = createClient(factory, mini, statePayload(), { [CLEANUP_ROUTE]: () => pending })
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  let tree = await mini.settle(section.component)
+
+  buttonByText(tree, '清理已过期').props.onClick()
+  tree = await mini.settle(section.component)
+  assert.equal(buttonByText(tree, '正在清理…').props.disabled, true)
+  assert.equal(buttonByText(tree, '永久删除全部').props.disabled, true)
+  // Refreshing is a read; it stays available while the write runs.
+  assert.equal(buttonByText(tree, '刷新').props.disabled, false)
+
+  release({ status: 200, body: { ok: true, purged: 0, failed: 0 } })
+  tree = await mini.settle(section.component)
+  assert.equal(client.toasts.at(-1).text, '没有需要清理的过期会话')
+  assert.equal(buttonByText(tree, '永久删除全部').props.disabled, false)
+})
+
+test('unmounting the settings section cancels an in-flight write', async (t) => {
+  const { factory, mini } = await loadModule()
+  let release
+  const pending = new Promise((resolve) => {
+    release = resolve
+  })
+  t.after(() => release({ status: 500, body: { ok: false } }))
+  const client = createClient(factory, mini, statePayload(), { [RESTORE_ROUTE]: () => pending })
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+
+  buttonByText(tree, '恢复').props.onClick()
+  const call = client.calls.find((entry) => entry.pathname === RESTORE_ROUTE)
+  assert.ok(call !== undefined)
+  assert.equal(call.options.signal.aborted, false)
+  mini.unmount()
+  assert.equal(call.options.signal.aborted, true)
+
+  release({ status: 200, body: { ok: true, session: { sessionId: 'session-alpha', title: 'Alpha', orphan: false } } })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  // A late response after unmount must not toast or write state.
+  assert.equal(client.toasts.length, 0)
+})
+
+test('a stalled write times out with a localized message and releases the gate', async () => {
+  const { factory, mini } = await loadModule()
+  const client = createClient(factory, mini, statePayload(), {
+    [RESTORE_ROUTE]: (options) =>
+      new Promise((_resolve, reject) => {
+        const abort = () => {
+          const error = new Error('aborted')
+          error.name = 'AbortError'
+          reject(error)
+        }
+        if (options.signal === undefined) return
+        if (options.signal.aborted) abort()
+        else options.signal.addEventListener('abort', abort, { once: true })
+      }),
+  })
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+  const originalSetTimeout = globalThis.setTimeout
+  try {
+    // Compress only the request budget; the renderer's settle delay stays short.
+    globalThis.setTimeout = (callback, delay, ...args) =>
+      originalSetTimeout(callback, typeof delay === 'number' && delay >= 1000 ? 0 : delay, ...args)
+    buttonByText(tree, '恢复').props.onClick()
+    await new Promise((resolve) => originalSetTimeout(resolve, 40))
+    const after = await mini.settle(section.component)
+    assert.equal(client.toasts.at(-1).text, '请求超时，请重试。')
+    assert.equal(client.toasts.at(-1).success, false)
+    assert.equal(buttonByText(after, '恢复').props.disabled, false)
+  } finally {
+    globalThis.setTimeout = originalSetTimeout
+  }
 })
