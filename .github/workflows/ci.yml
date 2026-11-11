@@ -125,7 +125,13 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test:coverage
+      - name: coverage over lib (thresholds)
+        run: >-
+          node test/run-unit.mjs --experimental-test-coverage
+          --test-coverage-include="lib/**"
+          --test-coverage-lines=85
+          --test-coverage-branches=70
+          --test-coverage-functions=84
 
   pack:
     name: package contents
