@@ -2,7 +2,7 @@
 
 简体中文 | [English](./README.en.md)
 
-[GitHub](https://github.com/wangxiaocuo/dsh-session-trash) · [npm](https://www.npmjs.com/package/@wangxiaocuo/dsh-session-trash)
+[GitHub](https://github.com/wangxiaocuo/dsh-session-trash) · [npm](https://www.npmjs.com/package/@wangxiaocuo/dsh-session-trash) · [更新记录](./CHANGELOG.md)
 
 DeepSeek Harness 的会话回收站插件。冷会话可以从侧边栏移出，日志保留在本地；保留期内可以恢复，到期后自动删除日志。面向 DSH 0.2.2-rc.1 的 Desktop 和 Web，Host 和 Client 在同一个包里，不需要构建步骤。
 
@@ -131,7 +131,7 @@ npm 安装的插件在「插件」页打开「会话回收站」的详情，展�
 
 `/state` 的 `stats.cleanup` 记录上次清理时间、下次清理时间、重试时间、连续失败次数和上次运行摘要。
 
-`/state` 的条目新增 `subagentCount`（一并移入的隐藏子会话数）和 `members`（父会话在前，含 `sessionId`、`origin`、`sizeBytes`）；`sizeBytes`/`fileCount` 是整棵树的总量。`/trash` 返回的 `entry` 使用同一形状。
+`/state` 的条目新增 `subagentCount`（一并移入的隐藏子会话数）和 `members`（父会话在前，含 `sessionId`、`origin`、`sizeBytes`）；`sizeBytes`/`fileCount` 是整棵树的总量。`/trash` 返回的 `entry` 使用同一形状。条目还带 `lastErrorCode`（稳定的失败分类，供页面本地化）和 `lastError`（英文原始诊断，只作 tooltip）。
 
 ## 数据与恢复
 
