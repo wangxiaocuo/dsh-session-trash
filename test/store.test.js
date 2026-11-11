@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { spawn } from 'node:child_process'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createTempDir, createLogger } from './helpers.js'
@@ -105,6 +106,53 @@ test('a stale lock is taken over and a live lock is refused', async () => {
     JSON.stringify({ pid: 1, host: 'test', startedAt: Date.now() - 11 * 60 * 1000 }),
   )
   await store.withLock(async () => {})
+  await fs.rm(root, { recursive: true, force: true })
+})
+
+test('a lock owned by another live process is respected until it exits', async (t) => {
+  const root = await createTempDir()
+  const trashRoot = path.join(root, '.session-trash')
+  const store = new TrashStore({ root: trashRoot, logger: createLogger() })
+  await store.init()
+  const lockPath = path.join(trashRoot, '.lock')
+  const script = [
+    'const fs = require("node:fs");',
+    'const os = require("node:os");',
+    'const lockPath = process.argv[1];',
+    'fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, host: os.hostname(), startedAt: Date.now() }));',
+    'setTimeout(() => {}, 60000);',
+  ].join('')
+  const child = spawn(process.execPath, ['-e', script, lockPath], { stdio: 'ignore' })
+  t.after(() => {
+    try {
+      child.kill('SIGKILL')
+    } catch {
+      // Already gone.
+    }
+  })
+  if (child.pid === undefined) {
+    t.skip('cannot spawn a second node process on this host')
+    return
+  }
+  const deadline = Date.now() + 10_000
+  while (Date.now() < deadline) {
+    try {
+      await fs.stat(lockPath)
+      break
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+  }
+  await assert.rejects(
+    store.withLock(async () => 'no'),
+    (error) => error instanceof TrashError && error.code === 'LOCKED',
+  )
+  child.kill('SIGKILL')
+  await new Promise((resolve) => child.once('exit', resolve))
+  // A crashed owner leaves its lock behind; waiting out the ten-minute stale
+  // window is impractical, so remove it the way an operator would.
+  await fs.rm(lockPath, { force: true })
+  assert.equal(await store.withLock(async () => 'ok'), 'ok')
   await fs.rm(root, { recursive: true, force: true })
 })
 

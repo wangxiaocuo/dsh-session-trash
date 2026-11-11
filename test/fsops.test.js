@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { createTempDir } from './helpers.js'
+import { createSymlinkOrSkip, createTempDir, directoryLinkType, skipAsRoot, skipOnWindows } from './helpers.js'
 import {
   CASE_INSENSITIVE_PATHS,
   comparablePath,
@@ -19,7 +19,7 @@ import {
 } from '../lib/fsops.js'
 import { TrashError } from '../lib/errors.js'
 
-test('measureDirectory excludes session.lock and never follows symlinks', async () => {
+test('measureDirectory excludes session.lock and never follows symlinks', async (t) => {
   const root = await createTempDir()
   const session = path.join(root, 'session-a')
   const outside = path.join(root, 'outside.bin')
@@ -28,7 +28,7 @@ test('measureDirectory excludes session.lock and never follows symlinks', async 
   await fs.writeFile(path.join(session, 'session.lock'), 'lock data that is not payload')
   await fs.writeFile(path.join(session, 'nested', 'more.txt'), 'xy')
   await fs.writeFile(outside, 'z'.repeat(1000))
-  await fs.symlink(outside, path.join(session, 'link.bin'))
+  if (!(await createSymlinkOrSkip(t, outside, path.join(session, 'link.bin'), 'file'))) return
 
   const measured = await measureDirectory(session)
   assert.deepEqual(measured, { sizeBytes: 7, fileCount: 2, symlinkCount: 1 })
@@ -113,13 +113,13 @@ test('moveDirectory removes a failed cross-device copy and keeps the source', as
   await fs.rm(root, { recursive: true, force: true })
 })
 
-test('moveDirectory rejects a symlink source and an existing destination', async () => {
+test('moveDirectory rejects a symlink source and an existing destination', async (t) => {
   const root = await createTempDir()
   const target = path.join(root, 'real')
   const link = path.join(root, 'link')
   const destination = path.join(root, 'dest')
   await fs.mkdir(target)
-  await fs.symlink(target, link)
+  if (!(await createSymlinkOrSkip(t, target, link, directoryLinkType()))) return
   await assert.rejects(moveDirectory(link, destination), (error) => error instanceof TrashError && error.code === 'UNSAFE_SESSION_DIR')
   await fs.mkdir(destination)
   await assert.rejects(moveDirectory(target, destination), (error) => error instanceof TrashError && error.code === 'RESTORE_TARGET_EXISTS')
@@ -279,7 +279,7 @@ test('a cross-device copy that runs out of space removes the temporary tree', as
   await fs.rm(root, { recursive: true, force: true })
 })
 
-test('a cross-device move keeps symlinks as symlinks', async () => {
+test('a cross-device move keeps symlinks as symlinks', async (t) => {
   const root = await createTempDir()
   const source = path.join(root, 'source')
   const destination = path.join(root, 'objects', 'session')
@@ -287,7 +287,7 @@ test('a cross-device move keeps symlinks as symlinks', async () => {
   await fs.mkdir(source, { recursive: true })
   await fs.writeFile(path.join(source, 'session.v4.jsonl'), 'hello')
   await fs.writeFile(outside, 'outside')
-  await fs.symlink(outside, path.join(source, 'link.bin'))
+  if (!(await createSymlinkOrSkip(t, outside, path.join(source, 'link.bin'), 'file'))) return
   const measured = await measureDirectory(source)
 
   let first = true
@@ -307,11 +307,79 @@ test('a cross-device move keeps symlinks as symlinks', async () => {
   await fs.rm(root, { recursive: true, force: true })
 })
 
-test('a destination permission failure reports IO_ERROR and keeps the source', async (t) => {
-  if (typeof process.getuid === 'function' && process.getuid() === 0) {
-    t.skip('permission checks are meaningless as root')
+test('moveDirectory maps a permission-shaped rename failure to IO_ERROR', async () => {
+  const root = await createTempDir()
+  const source = path.join(root, 'source')
+  await fs.mkdir(source, { recursive: true })
+  await fs.writeFile(path.join(source, 'session.v4.jsonl'), 'hello')
+  const rename = async () => {
+    const error = new Error('access denied')
+    error.code = 'EACCES'
+    throw error
+  }
+  await assert.rejects(
+    moveDirectory(source, path.join(root, 'objects', 'session'), null, { rename }),
+    (error) =>
+      error instanceof TrashError &&
+      error.code === 'IO_ERROR' &&
+      error.details.phase === 'rename' &&
+      error.details.code === 'EACCES',
+  )
+  assert.equal(await fs.readFile(path.join(source, 'session.v4.jsonl'), 'utf8'), 'hello')
+  // The destination parent directory is prepared, but the source directory
+  // itself must still be in place.
+  assert.equal((await fs.stat(source)).isDirectory(), true)
+  await fs.rm(root, { recursive: true, force: true })
+})
+
+test('a Windows junction counts as a symlink and is never moved as a directory', async (t) => {
+  if (process.platform !== 'win32') {
+    t.skip('junction semantics exist on Windows only')
     return
   }
+  const root = await createTempDir()
+  const session = path.join(root, 'session-a')
+  const outside = path.join(root, 'outside')
+  await fs.mkdir(session, { recursive: true })
+  await fs.mkdir(outside, { recursive: true })
+  await fs.writeFile(path.join(session, 'session.v4.jsonl'), 'hello')
+  if (!(await createSymlinkOrSkip(t, outside, path.join(session, 'linked'), 'junction'))) return
+  const measured = await measureDirectory(session)
+  assert.equal(measured.symlinkCount, 1)
+  await assert.rejects(
+    moveDirectory(path.join(session, 'linked'), path.join(root, 'objects', 'linked')),
+    (error) => error instanceof TrashError && error.code === 'UNSAFE_SESSION_DIR',
+  )
+  await fs.rm(root, { recursive: true, force: true })
+})
+
+test('a session under a long Windows path can be moved', async (t) => {
+  if (process.platform !== 'win32') {
+    t.skip('long-path handling is a Windows constraint')
+    return
+  }
+  const root = await createTempDir()
+  const nested = path.join(root, 'a'.repeat(80), 'b'.repeat(80), 'c'.repeat(80))
+  try {
+    await fs.mkdir(nested, { recursive: true })
+  } catch (error) {
+    const code = error !== null && typeof error === 'object' ? error.code : undefined
+    t.skip(`long paths are not enabled on this host (${code ?? 'unknown'})`)
+    return
+  }
+  const source = path.join(nested, 'session-a')
+  await fs.mkdir(source, { recursive: true })
+  await fs.writeFile(path.join(source, 'session.v4.jsonl'), 'hello')
+  const measured = await measureDirectory(source)
+  const destination = path.join(root, 'objects', 'session')
+  await moveDirectory(source, destination, measured)
+  assert.equal(await fs.readFile(path.join(destination, 'session.v4.jsonl'), 'utf8'), 'hello')
+  await fs.rm(root, { recursive: true, force: true })
+})
+
+test('a destination permission failure reports IO_ERROR and keeps the source', async (t) => {
+  if (skipAsRoot(t, 'permission checks are meaningless as root')) return
+  if (skipOnWindows(t, 'POSIX permission bits are not enforced on Windows')) return
   const root = await createTempDir()
   const source = path.join(root, 'source')
   const objects = path.join(root, 'objects')

@@ -15,6 +15,61 @@ export async function createTempDir(prefix = 'dsh-session-trash-') {
 }
 
 /**
+ * @param {object} t node:test context.
+ * @param {string} reason why this platform cannot exercise the case.
+ * @returns {boolean} whether the test was skipped.
+ */
+export function skipOnWindows(t, reason) {
+  if (process.platform !== 'win32') return false
+  t.skip(reason)
+  return true
+}
+
+/**
+ * @param {object} t node:test context.
+ * @param {string} reason why root cannot exercise the case.
+ * @returns {boolean} whether the test was skipped.
+ */
+export function skipAsRoot(t, reason) {
+  if (typeof process.getuid !== 'function' || process.getuid() !== 0) return false
+  t.skip(reason)
+  return true
+}
+
+/**
+ * Windows needs developer mode or an elevated process for file symbolic links;
+ * directory links use a junction, which needs no extra privilege.
+ *
+ * @returns {'junction' | undefined} the link type for a directory target.
+ */
+export function directoryLinkType() {
+  return process.platform === 'win32' ? 'junction' : undefined
+}
+
+/**
+ * Create a symbolic link, or skip the test when the platform forbids it.
+ *
+ * @param {object} t node:test context.
+ * @param {string} target link target.
+ * @param {string} linkPath new link path.
+ * @param {'file' | 'dir' | 'junction' | undefined} [type] Windows link type.
+ * @returns {Promise<boolean>} whether the link exists.
+ */
+export async function createSymlinkOrSkip(t, target, linkPath, type) {
+  try {
+    await fs.symlink(target, linkPath, type)
+    return true
+  } catch (error) {
+    const code = error !== null && typeof error === 'object' ? error.code : undefined
+    if (code === 'EPERM' || code === 'EACCES' || code === 'ENOTSUP' || code === 'ENOSYS') {
+      t.skip(`symbolic links are not permitted here (${code})`)
+      return false
+    }
+    throw error
+  }
+}
+
+/**
  * @returns {{ level: string, args: unknown[] }[]} logger records, plus no-op methods.
  */
 export function createLogger() {

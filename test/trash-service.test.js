@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { createHarness } from './helpers.js'
+import { createHarness, skipAsRoot, skipOnWindows } from './helpers.js'
 import { measureDirectory } from '../lib/fsops.js'
 import { TrashError } from '../lib/errors.js'
 
@@ -314,10 +314,8 @@ test('a session that becomes live just before the move is rolled back', async ()
 })
 
 test('a read-only trash root reports IO_ERROR without touching the session', async (t) => {
-  if (typeof process.getuid === 'function' && process.getuid() === 0) {
-    t.skip('permission checks are meaningless as root')
-    return
-  }
+  if (skipAsRoot(t, 'permission checks are meaningless as root')) return
+  if (skipOnWindows(t, 'POSIX permission bits are not enforced on Windows')) return
   const harness = await createHarness()
   const project = path.join(harness.root, 'project')
   await fs.mkdir(project)
@@ -334,6 +332,35 @@ test('a read-only trash root reports IO_ERROR without touching the session', asy
     )
   } finally {
     await fs.chmod(harness.store.objectsDir, 0o700)
+  }
+  assert.equal((await fs.stat(record.dir)).isDirectory(), true)
+  assert.equal(harness.store.entries().length, 0)
+  assert.deepEqual(await fs.readdir(harness.store.objectsDir), [])
+  await harness.dispose()
+})
+
+test('an object-creation failure maps to IO_ERROR without touching the session', async () => {
+  const harness = await createHarness()
+  const project = path.join(harness.root, 'project')
+  await fs.mkdir(project)
+  const record = await harness.addSession({ id: 'session-denied', cwd: project, title: 'Denied' })
+  const original = harness.store.createObjectDir.bind(harness.store)
+  harness.store.createObjectDir = async () => {
+    const error = new Error('access denied')
+    error.code = 'EACCES'
+    throw error
+  }
+  try {
+    await assert.rejects(
+      harness.service.trash('session-denied'),
+      (error) =>
+        error instanceof TrashError &&
+        error.code === 'IO_ERROR' &&
+        error.details.phase === 'create-object' &&
+        error.details.code === 'EACCES',
+    )
+  } finally {
+    harness.store.createObjectDir = original
   }
   assert.equal((await fs.stat(record.dir)).isDirectory(), true)
   assert.equal(harness.store.entries().length, 0)
