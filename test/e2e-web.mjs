@@ -21,8 +21,13 @@
  *
  *   npm run test:e2e
  *
- * Set `DSH_ELECTRON` to another Electron executable and `DSH_E2E_KEEP=1` to
- * keep the throwaway home and server log for inspection.
+ * The executable is discovered at the platform's usual install location, or
+ * from `DSH_ELECTRON`. When no desktop app is found the suite prints a skip
+ * message and exits 0 instead of failing. Set `DSH_E2E_KEEP=1` to keep the
+ * throwaway home and server log for inspection.
+ *
+ * The scenario that simulates a failed deletion through POSIX permission bits
+ * is skipped on Windows, where those bits are not enforced.
  */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -33,11 +38,90 @@ import { zstdCompressSync } from 'node:zlib'
 import { projectName } from './helpers.js'
 
 const DAY = 86_400_000
-const ELECTRON = process.env.DSH_ELECTRON ?? '/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness'
-const APP_ROOT = path.dirname(path.dirname(ELECTRON))
-const DSH_BIN = path.join(APP_ROOT, 'Resources/app.asar/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js')
 const REPO = path.resolve('.')
 const keep = process.env.DSH_E2E_KEEP === '1'
+
+/**
+ * @param {string} candidate path to probe.
+ * @returns {Promise<boolean>} whether the path exists.
+ */
+async function exists(candidate) {
+  try {
+    await fs.access(candidate)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Find the installed DeepSeek Harness desktop executable. `DSH_ELECTRON`
+ * always wins; otherwise the platform's usual install locations are probed.
+ * The suite skips (with a clear message) when nothing is found.
+ *
+ * @returns {Promise<string | undefined>} the executable path.
+ */
+async function resolveElectron() {
+  const override = process.env.DSH_ELECTRON
+  const candidates =
+    typeof override === 'string' && override !== ''
+      ? [override]
+      : process.platform === 'darwin'
+        ? [
+            '/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness',
+            path.join(os.homedir(), 'Applications', 'DeepSeek Harness.app', 'Contents', 'MacOS', 'DeepSeek Harness'),
+          ]
+        : process.platform === 'win32'
+          ? [
+              path.join(process.env.LOCALAPPDATA ?? '', 'Programs', 'DeepSeek Harness', 'DeepSeek Harness.exe'),
+              path.join(process.env.LOCALAPPDATA ?? '', 'DeepSeek Harness', 'DeepSeek Harness.exe'),
+              path.join(process.env.ProgramFiles ?? '', 'DeepSeek Harness', 'DeepSeek Harness.exe'),
+            ].filter((candidate) => path.isAbsolute(candidate))
+          : [
+              path.join(os.homedir(), '.local', 'bin', 'deepseek-harness'),
+              '/opt/DeepSeek Harness/deepseek-harness',
+            ]
+  for (const candidate of candidates) {
+    if (await exists(candidate)) return candidate
+  }
+  return undefined
+}
+
+/**
+ * Locate the bundled `dsh` CLI inside the desktop app resources.
+ *
+ * @param {string} electron desktop executable path.
+ * @returns {Promise<string | undefined>} the CLI entry path.
+ */
+async function resolveDshBin(electron) {
+  const executableDir = path.dirname(electron)
+  const resourceRoots =
+    process.platform === 'darwin'
+      ? [path.join(executableDir, '..', 'Resources')]
+      : [path.join(executableDir, 'resources'), path.join(executableDir, '..', 'resources')]
+  const relative = path.join('dsh', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
+  // app.asar is a regular file, so it can be probed; paths inside it cannot be
+  // stat-ed from plain Node, which is why the bundle itself is the existence
+  // check and the inner path is only handed to the spawned Electron process.
+  for (const resources of resourceRoots) {
+    for (const bundle of ['app.asar', 'app']) {
+      const base = path.join(resources, bundle)
+      if (await exists(base)) return path.join(base, relative)
+    }
+  }
+  return undefined
+}
+
+const ELECTRON = await resolveElectron()
+if (ELECTRON === undefined) {
+  console.log('e2e skipped: no DeepSeek Harness desktop found. Set DSH_ELECTRON to its executable path to run this suite.')
+  process.exit(0)
+}
+const DSH_BIN = await resolveDshBin(ELECTRON)
+if (DSH_BIN === undefined) {
+  console.log(`e2e skipped: cannot locate the bundled dsh CLI inside ${path.dirname(ELECTRON)}.`)
+  process.exit(0)
+}
 
 /**
  * @param {string} prefix temporary-directory prefix.
@@ -59,7 +143,8 @@ async function writeProfile(home) {
   const profile = path.join(home, 'profiles', 'web')
   const linked = path.join(profile, 'node_modules', '@wangxiaocuo')
   await fs.mkdir(linked, { recursive: true })
-  await fs.symlink(REPO, path.join(linked, 'dsh-session-trash'), 'dir')
+  // A junction needs no extra privilege on Windows, unlike a directory symlink.
+  await fs.symlink(REPO, path.join(linked, 'dsh-session-trash'), process.platform === 'win32' ? 'junction' : 'dir')
   await fs.writeFile(
     path.join(profile, 'package.json'),
     `${JSON.stringify(
@@ -224,31 +309,37 @@ async function startServer(home) {
   child.stderr.on('data', (chunk) => {
     log += chunk
   })
-  const url = await new Promise((resolve, reject) => {
-    const startedAt = Date.now()
-    const timer = setInterval(() => {
-      if (spawnError !== null) {
-        clearInterval(timer)
-        reject(new Error(`cannot start dsh web: ${spawnError.message}`))
-        return
-      }
-      const match = log.match(/dsh web: (http:\/\/127\.0\.0\.1:\d+\/\?token=[A-Za-z0-9_-]+)/)
-      if (match !== null) {
-        clearInterval(timer)
-        resolve(match[1])
-        return
-      }
-      if (child.exitCode !== null) {
-        clearInterval(timer)
-        reject(new Error(`dsh web exited with code ${child.exitCode}:\n${log}`))
-        return
-      }
-      if (Date.now() - startedAt > 60_000) {
-        clearInterval(timer)
-        reject(new Error(`dsh web did not print a URL within 60s:\n${log}`))
-      }
-    }, 100)
-  })
+  let url
+  try {
+    url = await new Promise((resolve, reject) => {
+      const startedAt = Date.now()
+      const timer = setInterval(() => {
+        if (spawnError !== null) {
+          clearInterval(timer)
+          reject(new Error(`cannot start dsh web: ${spawnError.message}`))
+          return
+        }
+        const match = log.match(/dsh web: (http:\/\/127\.0\.0\.1:\d+\/\?token=[A-Za-z0-9_-]+)/)
+        if (match !== null) {
+          clearInterval(timer)
+          resolve(match[1])
+          return
+        }
+        if (child.exitCode !== null) {
+          clearInterval(timer)
+          reject(new Error(`dsh web exited with code ${child.exitCode}:\n${log}`))
+          return
+        }
+        if (Date.now() - startedAt > 60_000) {
+          clearInterval(timer)
+          reject(new Error(`dsh web did not print a URL within 60s:\n${log}`))
+        }
+      }, 100)
+    })
+  } catch (error) {
+    child.kill('SIGKILL')
+    throw error
+  }
   return { child, url, log }
 }
 
@@ -372,7 +463,14 @@ async function waitForActivationSweep(api) {
  * @param {string} name scenario label.
  * @returns {void}
  */
+let passedGroups = 0
+
+/**
+ * @param {string} name scenario label.
+ * @returns {void}
+ */
 function pass(name) {
+  passedGroups += 1
   console.log(`e2e ✓ ${name}`)
 }
 
@@ -601,33 +699,42 @@ try {
   assert.equal(cleanupEntry.status, 200)
   const agedCleanup = await ageEntry(home, cleanupId, 31)
   const objectsDir = path.join(home, '.session-trash', 'objects')
-  await fs.chmod(objectsDir, 0o500)
-  let failedCleanup
-  try {
-    failedCleanup = await api.call('cleanup', { method: 'POST' })
-  } finally {
-    await fs.chmod(objectsDir, 0o700)
+  if (process.platform === 'win32') {
+    // Windows does not enforce POSIX permission bits, so a read-only directory
+    // cannot simulate a failed deletion there. Purge the entry and move on; the
+    // failure path is covered by the unit tests.
+    const skippedCleanup = await api.call('purge', { method: 'POST', body: { sessionId: cleanupId } })
+    assert.equal(skippedCleanup.status, 200)
+    console.log('e2e skip: cleanup failure diagnostics need POSIX permission bits')
+  } else {
+    await fs.chmod(objectsDir, 0o500)
+    let failedCleanup
+    try {
+      failedCleanup = await api.call('cleanup', { method: 'POST' })
+    } finally {
+      await fs.chmod(objectsDir, 0o700)
+    }
+    assert.equal(failedCleanup.status, 200)
+    assert.equal(failedCleanup.body.failed, 1)
+    assert.equal(failedCleanup.body.cleanup.consecutiveFailures >= 1, true)
+    // A manual cleanup records the failure but never schedules an automatic
+    // retry; the automatic retry policy is covered by the unit tests.
+    assert.equal(failedCleanup.body.cleanup.retryAt, null)
+    assert.equal(failedCleanup.body.cleanup.lastRun.failed, 1)
+    const failedState = await api.call('state')
+    const failedEntry = failedState.body.entries.find((entry) => entry.sessionId === cleanupId)
+    assert.equal(failedEntry.state, 'purging')
+    assert.ok(typeof failedEntry.lastError === 'string')
+    assert.equal((await fs.stat(path.join(home, '.session-trash', 'objects', agedCleanup.trashId))).isDirectory(), true)
+    const recoveredCleanup = await api.call('cleanup', { method: 'POST' })
+    assert.equal(recoveredCleanup.status, 200)
+    assert.equal(recoveredCleanup.body.failed, 0)
+    assert.equal(recoveredCleanup.body.cleanup.consecutiveFailures, 0)
+    assert.equal(recoveredCleanup.body.cleanup.retryAt, null)
+    const recoveredState = await api.call('state')
+    assert.equal(recoveredState.body.entries.some((entry) => entry.sessionId === cleanupId), false)
+    pass('cleanup failure diagnostics and manual recovery')
   }
-  assert.equal(failedCleanup.status, 200)
-  assert.equal(failedCleanup.body.failed, 1)
-  assert.equal(failedCleanup.body.cleanup.consecutiveFailures >= 1, true)
-  // A manual cleanup records the failure but never schedules an automatic retry;
-  // the automatic retry policy is covered by the unit tests.
-  assert.equal(failedCleanup.body.cleanup.retryAt, null)
-  assert.equal(failedCleanup.body.cleanup.lastRun.failed, 1)
-  const failedState = await api.call('state')
-  const failedEntry = failedState.body.entries.find((entry) => entry.sessionId === cleanupId)
-  assert.equal(failedEntry.state, 'purging')
-  assert.ok(typeof failedEntry.lastError === 'string')
-  assert.equal((await fs.stat(path.join(home, '.session-trash', 'objects', agedCleanup.trashId))).isDirectory(), true)
-  const recoveredCleanup = await api.call('cleanup', { method: 'POST' })
-  assert.equal(recoveredCleanup.status, 200)
-  assert.equal(recoveredCleanup.body.failed, 0)
-  assert.equal(recoveredCleanup.body.cleanup.consecutiveFailures, 0)
-  assert.equal(recoveredCleanup.body.cleanup.retryAt, null)
-  const recoveredState = await api.call('state')
-  assert.equal(recoveredState.body.entries.some((entry) => entry.sessionId === cleanupId), false)
-  pass('cleanup failure diagnostics and manual recovery')
 
   // --- Forget a missing entry --------------------------------------------
   const forgetTrashed = await api.call('trash', { method: 'POST', body: { sessionId: forgetId } })
@@ -770,7 +877,7 @@ try {
   assert.equal((await fs.stat(path.join(home, 'sessions', projectName(orderProject), orderIds[1]))).isDirectory(), true)
   pass('final index/object invariants')
 
-  console.log('e2e-web regression passed: 14 feature groups')
+  console.log(`e2e-web regression passed: ${passedGroups} feature groups`)
 } catch (error) {
   failure = error
   console.error(`e2e-web regression failed: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`)
