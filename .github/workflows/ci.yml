@@ -64,6 +64,8 @@ jobs:
     name: real-host e2e (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    env:
+      DSH_E2E_DSH_BIN: ${{ runner.temp }}/dsh-cli/node_modules/@deepseek-ai/dsh/lib/bin.js
     strategy:
       fail-fast: false
       matrix:
@@ -86,11 +88,16 @@ jobs:
           cd "$CLI_DIR"
           printf '{"name":"dsh-e2e-runtime","private":true}\n' > package.json
           pnpm add @deepseek-ai/dsh@0.2.2-rc.1
+      - name: verify the installed dsh runtime
+        shell: bash
+        run: test -f "$DSH_E2E_DSH_BIN"
       - name: e2e against the npm-installed dsh web host
         shell: bash
-        env:
-          DSH_E2E_DSH_BIN: ${{ runner.temp }}/dsh-cli/node_modules/@deepseek-ai/dsh/lib/bin.js
         run: pnpm test:e2e 2>&1 | tee "$RUNNER_TEMP/e2e.log"
+      - name: verify the e2e suite actually ran
+        if: success()
+        shell: bash
+        run: grep -q "e2e-web regression passed" "$RUNNER_TEMP/e2e.log"
       - name: annotate e2e failures
         if: failure()
         shell: bash

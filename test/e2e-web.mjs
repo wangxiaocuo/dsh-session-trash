@@ -124,18 +124,29 @@ async function resolveRuntime() {
   if (typeof CLI_BIN === 'string' && CLI_BIN !== '') {
     const bin = path.resolve(CLI_BIN)
     if (!(await exists(bin))) {
-      console.log(`e2e skipped: DSH_E2E_DSH_BIN does not exist: ${bin}`)
-      process.exit(0)
+      // An explicit runtime override that is broken is a configuration error,
+      // not a "skip": CI silently going green without running anything would
+      // be worse than failing.
+      console.error(`e2e failed: DSH_E2E_DSH_BIN does not exist: ${bin}`)
+      process.exit(1)
     }
     return { mode: 'cli', command: process.execPath, bin, env: {} }
   }
   const electron = await resolveElectron()
   if (electron === undefined) {
+    if (typeof process.env.DSH_ELECTRON === 'string' && process.env.DSH_ELECTRON !== '') {
+      console.error(`e2e failed: DSH_ELECTRON does not exist: ${process.env.DSH_ELECTRON}`)
+      process.exit(1)
+    }
     console.log('e2e skipped: no DeepSeek Harness desktop found. Set DSH_ELECTRON to its executable path to run this suite.')
     process.exit(0)
   }
   const dshBin = await resolveDshBin(electron)
   if (dshBin === undefined) {
+    if (typeof process.env.DSH_ELECTRON === 'string' && process.env.DSH_ELECTRON !== '') {
+      console.error(`e2e failed: cannot locate the bundled dsh CLI inside ${path.dirname(electron)}.`)
+      process.exit(1)
+    }
     console.log(`e2e skipped: cannot locate the bundled dsh CLI inside ${path.dirname(electron)}.`)
     process.exit(0)
   }
@@ -898,7 +909,7 @@ try {
   assert.equal((await fs.stat(path.join(home, 'sessions', projectName(orderProject), orderIds[1]))).isDirectory(), true)
   pass('final index/object invariants')
 
-  console.log(`e2e-web regression passed: ${passedGroups} feature groups`)
+  console.log(`e2e-web regression passed (${runtime.mode} host): ${passedGroups} feature groups`)
 } catch (error) {
   failure = error
   console.error(`e2e-web regression failed: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`)
