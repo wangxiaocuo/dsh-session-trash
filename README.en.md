@@ -6,7 +6,7 @@
 
 A session trash for DeepSeek Harness. Move cold sessions out of the sidebar without deleting their logs, restore them within the retention window, or delete the logs permanently. Built for DSH 0.2.2-rc.1 on Desktop and Web. Host and Client ship in one package, with no build step.
 
-Status: feature complete and covered by the regression suite. macOS has been verified on a real DSH Host. Windows and Linux path, lock, and retry rules have unit coverage but have not been run on those systems.
+Status: feature complete. CI (GitHub Actions) runs the unit and Host smoke tests on Ubuntu (Node 20/22) and Windows (Node 22); macOS has run the end-to-end suite against a real DSH Host. The Windows and Linux DSH Hosts have not been verified manually yet, and Windows skips the cases that rely on POSIX permission bits.
 
 ## Features
 
@@ -167,7 +167,7 @@ The index schema is v2; a v1 index is upgraded automatically on startup and pres
 - Permanent deletion removes the session log only. Attachments, images, projection-cache rows, and search-index rows are not deleted.
 - `/state` returns all entry summaries in one response. Search, filtering, and paging happen in the Client.
 - There is no cross-window live push. Another window's change appears after a refresh or when the window regains focus.
-- Windows and Linux have not been run on real hosts. On Windows, long paths over 260 characters and symlink copying depend on system configuration.
+- The Windows and Linux DSH Hosts have not been verified manually; CI covers unit and Host smoke tests only. On Windows, cases that rely on POSIX permission bits are skipped, and long paths over 260 characters / symlink copying depend on system configuration (the related tests skip themselves when unsupported).
 - macOS path comparison is case-insensitive. On a case-sensitive APFS volume, paths that differ only by case are treated as the same location.
 - Multiple DSH processes sharing one `DSH_HOME` serialize trash operations through `.lock`. A process paused for more than 10 minutes can lose the lock to another process.
 
@@ -180,9 +180,17 @@ pnpm test:smoke    # Host smoke test (real Cordis, plain Node)
 npm run test:e2e   # real dsh web end-to-end (needs the desktop app)
 ```
 
-The Host smoke test wires the plugin into a real Cordis context through the `@deepseek-ai/cordis` devDependency, creates its own temporary `DSH_HOME`, and removes it afterwards; it does not need the desktop app. Set `DSH_SMOKE_KEEP=1` to keep the temporary home for debugging. CI (GitHub Actions) runs the unit tests, the smoke test, and a package-contents check; the end-to-end suite needs a local DeepSeek Harness desktop install and is run manually.
+The Host smoke test wires the plugin into a real Cordis context through the `@deepseek-ai/cordis` devDependency, creates its own temporary `DSH_HOME`, and removes it afterwards; it does not need the desktop app. Set `DSH_SMOKE_KEEP=1` to keep the temporary home for debugging. `pnpm test` enumerates the test files through `test/run-unit.mjs`, so it does not depend on shell glob expansion and behaves the same on Windows and POSIX shells.
 
-`npm run test:e2e` boots a real `dsh web` Host in a temporary `DSH_HOME` and runs the full flow. It uses `/Applications/DeepSeek Harness.app` by default; set `DSH_ELECTRON` to another Electron executable. Set `DSH_E2E_KEEP=1` to keep the temporary home and logs.
+What CI verifies:
+
+| Check | Verified environment |
+|---|---|
+| Unit tests, Host smoke test | CI: Ubuntu Node 20/22, Windows Node 22 |
+| Package contents (`npm pack`) | CI: Ubuntu |
+| Real `dsh web` end to end | macOS + DSH 0.2.2-rc.1 (run manually) |
+
+`npm run test:e2e` boots a real `dsh web` Host in a temporary `DSH_HOME` and runs the full flow. It discovers the desktop app in the platform's usual install locations, or uses `DSH_ELECTRON`; when no desktop app is found it prints a skip message and exits 0. The cleanup-failure scenario that relies on POSIX permission bits is skipped on Windows. Set `DSH_E2E_KEEP=1` to keep the temporary home and logs.
 
 Project layout:
 

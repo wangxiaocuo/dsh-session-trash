@@ -6,7 +6,7 @@
 
 DeepSeek Harness 的会话回收站插件。冷会话可以从侧边栏移出，日志保留在本地；保留期内可以恢复，到期后自动删除日志。面向 DSH 0.2.2-rc.1 的 Desktop 和 Web，Host 和 Client 在同一个包里，不需要构建步骤。
 
-当前状态：功能已实现，回归测试与真实 Host 端到端测试通过。macOS 已在真实 DSH Host 上验证；Windows 和 Linux 的路径、锁、重试规则有单测覆盖，尚未在真实主机上运行。
+当前状态：功能已实现。CI（GitHub Actions）在 Ubuntu（Node 20/22）和 Windows（Node 22）上跑单元测试与 Host 冒烟测试；macOS 已在真实 DSH Host 上跑通端到端测试。Windows 和 Linux 的真实 DSH Host 尚未手动验证；Windows 上依赖 POSIX 权限位的用例会显式跳过。
 
 ## 功能
 
@@ -166,7 +166,7 @@ npm 安装的插件在「插件」页打开「会话回收站」的详情，展�
 - 永久删除只删除会话日志。附件、图片、投影缓存和搜索索引不会被删除。
 - `/state` 一次返回全部条目摘要，页面在客户端搜索、筛选和分页。
 - 没有跨窗口实时推送。另一个窗口的变更要等刷新或窗口重新获得焦点后出现。
-- Windows 和 Linux 尚未在真实主机上验证。Windows 超过 260 字符的长路径和符号链接复制受系统设置影响。
+- Windows 和 Linux 的真实 DSH Host 尚未手动验证；CI 只覆盖单元测试和 Host 冒烟测试。Windows 上依赖 POSIX 权限位的用例会跳过；超过 260 字符的长路径和符号链接复制受系统设置影响，对应用例在不支持时自动跳过。
 - macOS 的路径比较按大小写不敏感处理。在大小写敏感的 APFS 卷上，仅大小写不同的两个路径会被视为同一位置。
 - 多个 DSH 进程共享同一个 `DSH_HOME` 时，回收站操作通过 `.lock` 串行；进程暂停超过 10 分钟后，锁可能被另一个进程接管。
 
@@ -179,9 +179,17 @@ pnpm test:smoke    # Host 冒烟测试（真实 Cordis，普通 Node 即可）
 npm run test:e2e   # 真实 dsh web 端到端（需要本机桌面版）
 ```
 
-Host 冒烟测试通过 `@deepseek-ai/cordis` 这个 devDependency 装配真实插件上下文，自己创建并清理临时 `DSH_HOME`，不需要桌面版；设置 `DSH_SMOKE_KEEP=1` 可以保留临时目录用于排查。CI（GitHub Actions）会跑单元测试、冒烟测试和打包内容检查；e2e 依赖本机的 DeepSeek Harness 桌面版，需要手动执行。
+Host 冒烟测试通过 `@deepseek-ai/cordis` 这个 devDependency 装配真实插件上下文，自己创建并清理临时 `DSH_HOME`，不需要桌面版；设置 `DSH_SMOKE_KEEP=1` 可以保留临时目录用于排查。`pnpm test` 通过 `test/run-unit.mjs` 枚举测试文件，不依赖 shell 展开 glob，Windows 和 POSIX shell 行为一致。
 
-`npm run test:e2e` 会启动真实 `dsh web` Host，在临时 `DSH_HOME` 中跑完整流程。默认使用 `/Applications/DeepSeek Harness.app`，也可以用 `DSH_ELECTRON` 指向其他 Electron 可执行文件。设置 `DSH_E2E_KEEP=1` 可以保留临时目录和日志。
+验证范围：
+
+| 检查 | 已验证环境 |
+|---|---|
+| 单元测试、Host 冒烟测试 | CI：Ubuntu Node 20/22、Windows Node 22 |
+| 打包内容（`npm pack`） | CI：Ubuntu |
+| 真实 `dsh web` 端到端 | macOS + DSH 0.2.2-rc.1（手动执行） |
+
+`npm run test:e2e` 会启动真实 `dsh web` Host，在临时 `DSH_HOME` 中跑完整流程。脚本会按平台在常见安装位置查找桌面版，也可以用 `DSH_ELECTRON` 指向其他 Electron 可执行文件；找不到桌面版时打印跳过信息并以 0 退出。依赖 POSIX 权限位的「清理失败」场景在 Windows 上会跳过。设置 `DSH_E2E_KEEP=1` 可以保留临时目录和日志。
 
 项目结构：
 
