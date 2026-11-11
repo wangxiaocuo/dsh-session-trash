@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.6.7] - 2026-11-11
+
 ### Fixed
 
 - 回收站列表重新显示真实会话标题：DSH 0.2.2 的 `sessionQuery.readTitle()` 返回标题快照对象，插件此前只接受字符串，导致每条记录都退化成原工作区目录名（例如同一个工作区下的会话全显示为「Scratch」）。现在同时兼容标题快照、旧版字符串，以及 `readTitleSnapshots` 批量接口；日志无法折叠时再回退到 DSH 的会话投影缓存。
@@ -133,6 +135,7 @@
 
 - 回收站工具栏的「永久删除全部」与二次确认；`missing` 记录只移出索引，不删除会话文件。
 
+[0.6.7]: https://github.com/wangxiaocuo/dsh-session-trash/compare/v0.6.6...v0.6.7
 [0.6.6]: https://github.com/wangxiaocuo/dsh-session-trash/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/wangxiaocuo/dsh-session-trash/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/wangxiaocuo/dsh-session-trash/compare/v0.6.3...v0.6.4
