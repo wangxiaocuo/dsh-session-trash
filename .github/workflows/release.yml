@@ -1,0 +1,72 @@
+# Publish a release from a version tag.
+#
+# Pushing a `vX.Y.Z` tag runs the full validation set (typecheck, unit/dom
+# tests, Host smoke test, real-host e2e against an npm-installed dsh web host),
+# publishes to npm with provenance, and creates the GitHub release.
+#
+# npm authentication uses Trusted Publishing (OIDC), so no NPM_TOKEN secret is
+# required: configure the package on npmjs.com under Settings -> Publishing
+# access -> Trusted publishers with repository `wangxiaocuo/dsh-session-trash`
+# and workflow file `release.yml`. If you prefer an automation token instead,
+# uncomment the NODE_AUTH_TOKEN environment variable below and add the secret.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+      - name: verify the tag matches package.json
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match package version v${version}"
+            exit 1
+          fi
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm test:smoke
+      - name: install the DSH runtime
+        shell: bash
+        run: |
+          CLI_DIR="$RUNNER_TEMP/dsh-cli"
+          mkdir -p "$CLI_DIR"
+          cd "$CLI_DIR"
+          printf '{"name":"dsh-e2e-runtime","private":true}\n' > package.json
+          pnpm add @deepseek-ai/dsh@0.2.2-rc.1
+      - name: e2e against the npm-installed dsh web host
+        shell: bash
+        env:
+          DSH_E2E_DSH_BIN: ${{ runner.temp }}/dsh-cli/node_modules/@deepseek-ai/dsh/lib/bin.js
+        run: pnpm test:e2e
+      - name: publish to npm
+        # env:
+        #   NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public
+      - name: create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
