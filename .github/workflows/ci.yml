@@ -60,6 +60,48 @@ jobs:
           exit 0
       - run: pnpm test:smoke
 
+  e2e:
+    name: real-host e2e (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: install the DSH runtime
+        shell: bash
+        run: |
+          CLI_DIR="$RUNNER_TEMP/dsh-cli"
+          mkdir -p "$CLI_DIR"
+          cd "$CLI_DIR"
+          printf '{"name":"dsh-e2e-runtime","private":true}\n' > package.json
+          pnpm add @deepseek-ai/dsh@0.2.2-rc.1
+      - name: e2e against the npm-installed dsh web host
+        shell: bash
+        env:
+          DSH_E2E_DSH_BIN: ${{ runner.temp }}/dsh-cli/node_modules/@deepseek-ai/dsh/lib/bin.js
+        run: pnpm test:e2e 2>&1 | tee "$RUNNER_TEMP/e2e.log"
+      - name: annotate e2e failures
+        if: failure()
+        shell: bash
+        run: |
+          log="$RUNNER_TEMP/e2e.log"
+          if [ ! -f "$log" ]; then exit 0; fi
+          grep -aE "e2e-web regression failed|AssertionError|Error:|spawn error|dsh web:" "$log" | head -40 | while IFS= read -r line; do
+            echo "::error::$line"
+          done
+          exit 0
+
   coverage:
     name: coverage (node 22)
     runs-on: ubuntu-latest
