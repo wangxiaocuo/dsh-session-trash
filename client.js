@@ -32,6 +32,19 @@ window.__ModuleLoader__.load({
      * Preflight refusals the user can act on themselves. Those keep a visible
      * menu entry that explains the refusal instead of hiding it.
      */
+    /** Host `lastErrorCode` values mapped to owner-facing messages. */
+    const LAST_ERROR_KEYS = {
+      TRASH_COPY_MISSING: 'lastErrorTrashCopyMissing',
+      TRASH_COPY_MISSING_MEMBERS: 'lastErrorTrashCopyMissingMembers',
+      TRASH_OBJECT_MISSING: 'lastErrorTrashObjectMissing',
+      PURGE_FAILED: 'lastErrorPurgeFailed',
+      RESTORE_INVISIBLE: 'lastErrorRestoreInvisible',
+      MOVE_UNSETTLED: 'lastErrorMoveUnsettled',
+      SOURCE_CONFLICT: 'lastErrorSourceConflict',
+      INDEX_WRITE_FAILED: 'lastErrorIndexWriteFailed',
+      IO_ERROR: 'lastErrorIo',
+    }
+
     const MOVE_BLOCKED_KEYS = {
       SESSION_LIVE: { label: 'moveBlockedLive', toast: 'blockedLiveToast' },
       SESSION_ACTIVE: { label: 'moveBlockedActive', toast: 'blockedActiveToast' },
@@ -77,7 +90,8 @@ window.__ModuleLoader__.load({
       retry: '重试',
       cleanupExpired: '清理已过期',
       cleaning: '正在清理…',
-      statsCount: '{count} 个会话',
+      statsCountOne: '{count} 个会话',
+      statsCountOther: '{count} 个会话',
       statsSize: '占用 {size}',
       searchLabel: '搜索回收站',
       searchPlaceholder: '搜索标题、Session ID 或原始工作区',
@@ -127,7 +141,8 @@ window.__ModuleLoader__.load({
       badgeMigration: '需要迁移',
       badgeExpiring: '即将到期',
       badgeExpired: '已过期',
-      badgeSubagents: '含 {count} 个子会话',
+      badgeSubagentsOne: '含 {count} 个子会话',
+      badgeSubagentsOther: '含 {count} 个子会话',
       stateTrashing: '正在移入…',
       stateRestoring: '正在恢复…',
       statePurging: '正在删除…',
@@ -135,7 +150,7 @@ window.__ModuleLoader__.load({
       actionRestoreFor: '恢复「{title}」',
       actionMoreFor: '「{title}」的更多操作',
       actionRestoreOrphan: '恢复为孤儿会话',
-      actionReveal: '在 Finder 中显示',
+      actionReveal: '在文件管理器中显示',
       actionRevealDisabled: '原工作区已不存在',
       actionCopyId: '复制 Session ID',
       actionForget: '从索引移除',
@@ -152,23 +167,37 @@ window.__ModuleLoader__.load({
       purgeAllTitle: '永久删除回收站中的全部 {count} 个会话？',
       purgeAllBody: '此操作不可撤销。附件、图片和搜索索引等衍生物不会被删除。',
       purgeAllConfirm: '全部永久删除',
-      purgeAllDone: '已永久删除 {count} 个会话',
+      purgeAllDoneOne: '已永久删除 {count} 个会话',
+      purgeAllDoneOther: '已永久删除 {count} 个会话',
       purgeAllNone: '回收站中没有可删除的会话',
-      purgeAllPartial: '已永久删除 {removed} 个会话，{failed} 个未能删除',
+      purgeAllPartial: '批量删除完成：成功 {removed} 个，失败 {failed} 个。',
       forgetTitle: '从回收站列表移除这条缺失记录？',
       forgetBody: '不会删除任何文件；仅移除索引中的这条记录。',
       forgetConfirm: '从索引移除',
-      cleanupDone: '已清理 {count} 个过期会话',
+      cleanupDoneOne: '已清理 {count} 个过期会话',
+      cleanupDoneOther: '已清理 {count} 个过期会话',
       cleanupNone: '没有需要清理的过期会话',
-      cleanupFailedBanner: '上次自动清理有 {count} 个会话未能删除。',
-      cleanupErrorBanner: '上次自动清理失败：{message}',
+      cleanupFailedBannerOne: '上次自动清理有 {count} 个会话未能删除。',
+      cleanupFailedBannerOther: '上次自动清理有 {count} 个会话未能删除。',
+      cleanupErrorBanner: '上次自动清理失败，请稍后在本页重试。',
+      cleanupFailed: '清理失败：还有 {failed} 个过期会话没有删除。',
+      cleanupPartial: '已清理 {purged} 个过期会话，{failed} 个没有删除。',
       cleanupRetryAt: '将在 {time} 自动重试。',
       cleanupRetryNow: '立即重试',
       copySuccess: '已复制 Session ID',
       copyFailed: '无法复制 Session ID，请手动复制',
-      revealSuccess: '已在 Finder 中显示原工作区',
+      revealSuccess: '已在文件管理器中显示原工作区',
       revealFailed: '无法打开原工作区',
       lastErrorLabel: '上次错误：{message}',
+      lastErrorTrashCopyMissing: '回收站里的会话副本缺失。',
+      lastErrorTrashCopyMissingMembers: '回收站里的部分子会话副本缺失。',
+      lastErrorTrashObjectMissing: '回收站对象目录缺失。',
+      lastErrorPurgeFailed: '会话日志删除失败。',
+      lastErrorRestoreInvisible: '恢复后会话存储没有识别到该会话。',
+      lastErrorMoveUnsettled: '会话已移动，但会话存储仍报告它存在。',
+      lastErrorSourceConflict: '原会话目录与回收站副本同时存在，两者都已保留。',
+      lastErrorIndexWriteFailed: '回收站索引写入失败。',
+      lastErrorIo: '文件操作失败。',
       footnote: '回收站目录：{path}',
       move: '移入回收站',
       moveBlockedLive: '移入回收站（会话已打开）',
@@ -177,7 +206,8 @@ window.__ModuleLoader__.load({
       undo: '撤销',
       undoFailed: '撤销失败',
       trashSuccess: '已将「{title}」移入回收站',
-      trashSuccessTree: '「{title}」及其 {count} 个子会话已移入回收站',
+      trashSuccessTreeOne: '「{title}」及其 {count} 个子会话已移入回收站',
+      trashSuccessTreeOther: '「{title}」及其 {count} 个子会话已移入回收站',
       blockedLiveToast: '该会话已在本机打开。DSH 目前不会释放已打开的会话，请重启 DSH 后再移入回收站。',
       blockedActiveToast: '该会话还有正在运行的任务或子代理，等它停下来后再移入回收站。',
       blockedDescendantsToast: '该会话包含可见的子会话，只能使用 DSH 自带的「归档」整棵会话树。',
@@ -202,7 +232,7 @@ window.__ModuleLoader__.load({
       errorIndexCorrupt: '回收站索引损坏，已进入保护模式。',
       errorIndexOk: '回收站索引可正常读取，无需重建。',
       errorForgetNotAllowed: '只有文件缺失的记录可以从索引移除。',
-      errorRevealUnavailable: '当前环境无法打开 Finder。',
+      errorRevealUnavailable: '当前环境无法打开文件管理器。',
       errorRevealFailed: '无法打开原工作区。',
       errorIo: '文件操作失败，请稍后重试。',
     }
@@ -215,7 +245,8 @@ window.__ModuleLoader__.load({
       retry: 'Retry',
       cleanupExpired: 'Delete expired',
       cleaning: 'Cleaning…',
-      statsCount: '{count} sessions',
+      statsCountOne: '{count} session',
+      statsCountOther: '{count} sessions',
       statsSize: '{size} used',
       searchLabel: 'Search the trash',
       searchPlaceholder: 'Search title, Session ID, or original workspace',
@@ -265,7 +296,8 @@ window.__ModuleLoader__.load({
       badgeMigration: 'Migration required',
       badgeExpiring: 'Expiring soon',
       badgeExpired: 'Expired',
-      badgeSubagents: '{count} sub-sessions',
+      badgeSubagentsOne: '{count} sub-session',
+      badgeSubagentsOther: '{count} sub-sessions',
       stateTrashing: 'Moving…',
       stateRestoring: 'Restoring…',
       statePurging: 'Deleting…',
@@ -273,7 +305,7 @@ window.__ModuleLoader__.load({
       actionRestoreFor: 'Restore “{title}”',
       actionMoreFor: 'More actions for “{title}”',
       actionRestoreOrphan: 'Restore as orphan',
-      actionReveal: 'Show in Finder',
+      actionReveal: 'Show in file manager',
       actionRevealDisabled: 'The original workspace no longer exists',
       actionCopyId: 'Copy Session ID',
       actionForget: 'Remove from index',
@@ -290,23 +322,37 @@ window.__ModuleLoader__.load({
       purgeAllTitle: 'Permanently delete all {count} sessions in the trash?',
       purgeAllBody: 'This cannot be undone. Attachments, images, and search index rows are not deleted.',
       purgeAllConfirm: 'Delete all permanently',
-      purgeAllDone: 'Permanently deleted {count} sessions',
+      purgeAllDoneOne: 'Permanently deleted {count} session',
+      purgeAllDoneOther: 'Permanently deleted {count} sessions',
       purgeAllNone: 'No sessions to delete',
-      purgeAllPartial: 'Permanently deleted {removed} sessions; {failed} could not be deleted',
+      purgeAllPartial: 'Bulk delete finished: {removed} removed, {failed} failed.',
       forgetTitle: 'Remove this missing record from the trash list?',
       forgetBody: 'No file is deleted; only this index record is removed.',
       forgetConfirm: 'Remove from index',
-      cleanupDone: 'Deleted {count} expired sessions',
+      cleanupDoneOne: 'Deleted {count} expired session',
+      cleanupDoneOther: 'Deleted {count} expired sessions',
       cleanupNone: 'No expired sessions to delete',
-      cleanupFailedBanner: 'The last automatic cleanup could not delete {count} session(s).',
-      cleanupErrorBanner: 'The last automatic cleanup failed: {message}',
+      cleanupFailedBannerOne: 'The last automatic cleanup could not delete {count} expired session.',
+      cleanupFailedBannerOther: 'The last automatic cleanup could not delete {count} expired sessions.',
+      cleanupErrorBanner: 'The last automatic cleanup failed. Retry from this page later.',
+      cleanupFailed: 'Cleanup could not delete {failed} of the expired sessions.',
+      cleanupPartial: 'Cleanup deleted {purged}; {failed} could not be deleted.',
       cleanupRetryAt: 'Next retry: {time}.',
       cleanupRetryNow: 'Retry now',
       copySuccess: 'Session ID copied',
       copyFailed: 'Could not copy the Session ID. Copy it manually.',
-      revealSuccess: 'Revealed the original workspace in Finder',
+      revealSuccess: 'Revealed the original workspace in the file manager',
       revealFailed: 'Could not open the original workspace',
       lastErrorLabel: 'Last error: {message}',
+      lastErrorTrashCopyMissing: 'The stored copy of this session is missing from the trash.',
+      lastErrorTrashCopyMissingMembers: 'Some sub-session copies are missing from the trash.',
+      lastErrorTrashObjectMissing: 'The trash object directory is missing.',
+      lastErrorPurgeFailed: 'The session log could not be deleted.',
+      lastErrorRestoreInvisible: 'Session storage did not report the restored session.',
+      lastErrorMoveUnsettled: 'The session was moved, but session storage still reports it.',
+      lastErrorSourceConflict: 'The original session directory and the trash copy both exist; both were kept.',
+      lastErrorIndexWriteFailed: 'The trash index could not be written.',
+      lastErrorIo: 'A file operation failed.',
       footnote: 'Trash directory: {path}',
       move: 'Move to trash',
       moveBlockedLive: 'Move to trash (session is open)',
@@ -315,7 +361,8 @@ window.__ModuleLoader__.load({
       undo: 'Undo',
       undoFailed: 'Could not undo',
       trashSuccess: 'Moved “{title}” to the trash',
-      trashSuccessTree: '“{title}” and its {count} sub-sessions were moved to the trash',
+      trashSuccessTreeOne: '“{title}” and its single sub-session were moved to the trash',
+      trashSuccessTreeOther: '“{title}” and its {count} sub-sessions were moved to the trash',
       blockedLiveToast: 'This session is open in DSH. DSH does not release opened sessions yet; restart DSH, then move it to the trash.',
       blockedActiveToast: 'This session still has running work; wait for it to stop, then move it to the trash.',
       blockedDescendantsToast: 'This session has visible child sessions; use the built-in Archive action for the whole tree instead.',
@@ -340,7 +387,7 @@ window.__ModuleLoader__.load({
       errorIndexCorrupt: 'The trash index is damaged, so protection mode is on.',
       errorIndexOk: 'The trash index is readable and does not need a rebuild.',
       errorForgetNotAllowed: 'Only records whose log is missing can be removed from the index.',
-      errorRevealUnavailable: 'This environment cannot open Finder.',
+      errorRevealUnavailable: 'This environment cannot open a file manager.',
       errorRevealFailed: 'Could not open the original workspace.',
       errorIo: 'A file operation failed. Try again.',
     }
@@ -359,11 +406,26 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * @param {number} bytes raw byte count.
-     * @returns {string} a compact human-readable size.
+     * Pick the grammatical singular/plural locale form for a count.
+     *
+     * @param {(key: string) => string} t bound translator.
+     * @param {string} key base locale key (without the One/Other suffix).
+     * @param {number} count item count.
+     * @param {Record<string, unknown>} [values] extra placeholders.
+     * @returns {string} the formatted text.
+     */
+    function countText(t, key, count, values = {}) {
+      const template = t(`${key}${count === 1 ? 'One' : 'Other'}`)
+      return format(template, { ...values, count })
+    }
+
+    /**
+     * @param {number | null | undefined} bytes raw byte count.
+     * @returns {string} a compact human-readable size, or an em dash when unknown.
      */
     function formatBytes(bytes) {
-      if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes <= 0) return '0 B'
+      if (typeof bytes !== 'number' || !Number.isFinite(bytes)) return '—'
+      if (bytes <= 0) return '0 B'
       const units = ['B', 'KB', 'MB', 'GB', 'TB']
       let value = bytes
       let unit = 0
@@ -1090,6 +1152,7 @@ window.__ModuleLoader__.load({
         const [rebuilding, setRebuilding] = React.useState(false)
         const [purgingAll, setPurgingAll] = React.useState(false)
         const [announcement, setAnnouncement] = React.useState('')
+        const [clock, setClock] = React.useState(() => Date.now())
         const [query, setQuery] = React.useState('')
         const [filter, setFilter] = React.useState('all')
         const [page, setPage] = React.useState(1)
@@ -1145,6 +1208,19 @@ window.__ModuleLoader__.load({
             if (!previous.has(sessionId)) return previous
             const next = new Set(previous)
             next.delete(sessionId)
+            return next
+          })
+        }
+
+        /**
+         * @param {string} sessionId row whose owner-facing error is resolved.
+         * @returns {void}
+         */
+        function clearRowError(sessionId) {
+          setRowErrors((previous) => {
+            if (!(sessionId in previous)) return previous
+            const next = { ...previous }
+            delete next[sessionId]
             return next
           })
         }
@@ -1283,6 +1359,15 @@ window.__ModuleLoader__.load({
           }
         }, [load])
 
+        // Keep relative expiry text honest on a page left open for a long time.
+        React.useEffect(() => {
+          if (typeof window === 'undefined' || typeof window.setInterval !== 'function') return undefined
+          const handle = window.setInterval(() => setClock(Date.now()), 60_000)
+          return () => {
+            if (typeof window.clearInterval === 'function') window.clearInterval(handle)
+          }
+        }, [])
+
         const data = view.data
         const entries = data !== null && Array.isArray(data.entries) ? [...data.entries] : []
         entries.sort((left, right) => (right.trashedAt ?? 0) - (left.trashedAt ?? 0))
@@ -1323,7 +1408,7 @@ window.__ModuleLoader__.load({
         const corrupt = data !== null && data.index !== undefined && data.index.status === 'corrupt'
         const recovered = data !== null && data.index !== undefined && data.index.status === 'recovered'
         const unindexed = data !== null && data.index !== undefined && typeof data.index.unindexed === 'number' ? data.index.unindexed : 0
-        const now = Date.now()
+        const now = clock
         const normalizedQuery = query.trim().toLowerCase()
 
         /**
@@ -1356,6 +1441,9 @@ window.__ModuleLoader__.load({
         const filteredEntries = entries.filter((entry) => matchesQuery(entry) && matchesFilter(entry))
         const pageCount = Math.max(1, Math.ceil(filteredEntries.length / PAGE_SIZE))
         const currentPage = Math.min(Math.max(1, page), pageCount)
+        React.useEffect(() => {
+          if (page > pageCount) setPage(pageCount)
+        }, [page, pageCount])
         const pageStart = (currentPage - 1) * PAGE_SIZE
         const visibleEntries = filteredEntries.slice(pageStart, pageStart + PAGE_SIZE)
         const filtersActive = normalizedQuery !== '' || filter !== 'all'
@@ -1444,6 +1532,7 @@ window.__ModuleLoader__.load({
               session !== null && session !== undefined && typeof session.title === 'string' && session.title !== ''
                 ? session.title
                 : entry.title
+            clearRowError(entry.sessionId)
             const message = format(t(orphan ? 'restoreOrphanSuccess' : 'restoreSuccess'), { title })
             bumpRevision()
             ctx.contextMenus.notify(message, true)
@@ -1472,6 +1561,7 @@ window.__ModuleLoader__.load({
               fail(entry, describeActionFailure(outcome.status, outcome.payload, t))
               return
             }
+            clearRowError(entry.sessionId)
             const message = format(t('purgeSuccess'), { title: entry.title })
             bumpRevision()
             ctx.contextMenus.notify(message, true)
@@ -1500,6 +1590,7 @@ window.__ModuleLoader__.load({
               fail(entry, describeActionFailure(outcome.status, outcome.payload, t))
               return
             }
+            clearRowError(entry.sessionId)
             bumpRevision()
             ctx.contextMenus.notify(t('forgetSuccess'), true)
             announce(t('forgetSuccess'))
@@ -1527,6 +1618,7 @@ window.__ModuleLoader__.load({
               fail(entry, describeActionFailure(outcome.status, outcome.payload, t))
               return
             }
+            clearRowError(entry.sessionId)
             ctx.contextMenus.notify(t('revealSuccess'), true)
             announce(t('revealSuccess'))
           } finally {
@@ -1563,13 +1655,15 @@ window.__ModuleLoader__.load({
               ctx.contextMenus.notify(describeActionFailure(outcome.status, outcome.payload, t), false)
               return
             }
-            const purged =
-              outcome.payload !== null && outcome.payload !== undefined && typeof outcome.payload.purged === 'number'
-                ? outcome.payload.purged
-                : 0
-            const message = purged > 0 ? format(t('cleanupDone'), { count: purged }) : t('cleanupNone')
+            const payload = outcome.payload
+            const purged = payload !== null && payload !== undefined && typeof payload.purged === 'number' ? payload.purged : 0
+            const failed = payload !== null && payload !== undefined && typeof payload.failed === 'number' ? payload.failed : 0
+            let message
+            if (failed > 0 && purged > 0) message = format(t('cleanupPartial'), { purged, failed })
+            else if (failed > 0) message = format(t('cleanupFailed'), { failed })
+            else message = purged > 0 ? countText(t, 'cleanupDone', purged) : t('cleanupNone')
             bumpRevision()
-            ctx.contextMenus.notify(message, true)
+            ctx.contextMenus.notify(message, failed === 0)
             announce(message)
           } finally {
             endWrite()
@@ -1606,7 +1700,7 @@ window.__ModuleLoader__.load({
               failed > 0
                 ? format(t('purgeAllPartial'), { removed, failed })
                 : removed > 0
-                  ? format(t('purgeAllDone'), { count: removed })
+                  ? countText(t, 'purgeAllDone', removed)
                   : t('purgeAllNone')
             bumpRevision()
             ctx.contextMenus.notify(message, failed === 0)
@@ -1741,7 +1835,7 @@ window.__ModuleLoader__.load({
           if (subagentCount > 0) {
             badges.push({
               key: 'subagents',
-              label: format(t('badgeSubagents'), { count: subagentCount }),
+              label: countText(t, 'badgeSubagents', subagentCount),
               tone: 'info',
             })
           }
@@ -1827,9 +1921,7 @@ window.__ModuleLoader__.load({
           const retryText =
             cleanupRetryAt !== null ? format(t('cleanupRetryAt'), { time: formatDate(cleanupRetryAt, locale, true) }) : ''
           const cleanupMessage =
-            cleanupFailed > 0
-              ? format(t('cleanupFailedBanner'), { count: cleanupFailed })
-              : format(t('cleanupErrorBanner'), { message: cleanupError })
+            cleanupFailed > 0 ? countText(t, 'cleanupFailedBanner', cleanupFailed) : t('cleanupErrorBanner')
           banners.push(
             h(
               'div',
@@ -1837,7 +1929,7 @@ window.__ModuleLoader__.load({
               h(TrashGlyph, { size: 16 }),
               h(
                 'span',
-                { className: 'dsh-trash__bannerText' },
+                { className: 'dsh-trash__bannerText', title: cleanupError ?? undefined },
                 cleanupMessage,
                 retryText === '' ? null : ` ${retryText}`,
               ),
@@ -1882,7 +1974,7 @@ window.__ModuleLoader__.load({
                 h(
                   'span',
                   { className: 'dsh-trash__stats' },
-                  format(t('statsCount'), { count: entries.length }),
+                  countText(t, 'statsCount', entries.length),
                   h('span', { className: 'dsh-trash__dot', 'aria-hidden': true }, '·'),
                   format(t('statsSize'), { size: formatBytes(totalBytes) }),
                   h('span', { className: 'dsh-trash__dot', 'aria-hidden': true }, '·'),
@@ -2047,7 +2139,14 @@ window.__ModuleLoader__.load({
             { className: 'dsh-trash__list', 'aria-label': t('listLabel') },
             visibleEntries.map((entry) => {
               const rowBusy = pendingRows.has(entry.sessionId)
-              const error = rowErrors[entry.sessionId] ?? entry.lastError
+              const rowError = rowErrors[entry.sessionId]
+              const lastErrorCode = typeof entry.lastErrorCode === 'string' ? entry.lastErrorCode : null
+              const lastErrorText =
+                typeof entry.lastError === 'string' && entry.lastError !== ''
+                  ? t(LAST_ERROR_KEYS[lastErrorCode] ?? 'lastErrorIo')
+                  : null
+              const error = rowError ?? lastErrorText
+              const errorTitle = rowError === undefined && typeof entry.lastError === 'string' ? entry.lastError : undefined
               const title = entry.title !== undefined && entry.title !== '' ? entry.title : entry.sessionId
               return h(
                 'li',
@@ -2087,7 +2186,11 @@ window.__ModuleLoader__.load({
                     h('span', null, formatBytes(entry.sizeBytes)),
                   ),
                   error !== null && error !== undefined && error !== ''
-                    ? h('div', { className: 'dsh-trash__rowError', role: 'status' }, format(t('lastErrorLabel'), { message: error }))
+                    ? h(
+                        'div',
+                        { className: 'dsh-trash__rowError', role: 'status', title: errorTitle },
+                        format(t('lastErrorLabel'), { message: error }),
+                      )
                     : null,
                 ),
                 h(
@@ -2252,7 +2355,7 @@ window.__ModuleLoader__.load({
                 : 0
             const message =
               subagentCount > 0
-                ? format(t('trashSuccessTree'), { title, count: subagentCount })
+                ? countText(t, 'trashSuccessTree', subagentCount, { title })
                 : format(t('trashSuccess'), { title })
             ctx.contextMenus.notify(message, true, {
               label: t('undo'),

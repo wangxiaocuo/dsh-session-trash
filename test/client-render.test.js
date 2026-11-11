@@ -542,7 +542,7 @@ test('the trash page renders rows, badges, and row actions from /state', async (
   const menus = actionMenus(tree)
   assert.equal(menus.length, 1)
   const labels = menus[0].props.items.map((item) => item.label)
-  assert.deepEqual(labels, ['恢复为孤儿会话', '在 Finder 中显示', '复制 Session ID', '永久删除'])
+  assert.deepEqual(labels, ['恢复为孤儿会话', '在文件管理器中显示', '复制 Session ID', '永久删除'])
   assert.equal(menus[0].props.items.at(-1).danger, true)
   assert.equal(menus[0].props.label, '「Alpha」的更多操作')
 })
@@ -621,16 +621,19 @@ test('a missing row offers only the index-removal action', async () => {
       canForget: true,
       expiresAt: null,
       lastError: 'The trash copy is missing.',
+      lastErrorCode: 'TRASH_COPY_MISSING',
     }),
   )
   const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
   const tree = await mini.settle(section.component)
   const text = textOf(tree)
   assert.ok(text.includes('文件缺失'))
-  assert.ok(text.includes('上次错误：The trash copy is missing.'))
+  assert.ok(text.includes('上次错误：回收站里的会话副本缺失。'))
+  const rowError = elementByClass(tree, 'dsh-trash__rowError')
+  assert.equal(rowError.props.title, 'The trash copy is missing.')
   assert.equal(buttonByText(tree, '恢复'), undefined)
   const labels = actionMenus(tree)[0].props.items.map((item) => item.label)
-  assert.deepEqual(labels, ['在 Finder 中显示', '复制 Session ID', '从索引移除'])
+  assert.deepEqual(labels, ['在文件管理器中显示', '复制 Session ID', '从索引移除'])
 })
 
 test('restoring a trashed row posts normal mode and shows a success Toast', async () => {
@@ -671,7 +674,7 @@ test('a missing workspace opens the orphan dialog before restoring', async () =>
   assert.ok(textOf(tree).includes('工作区缺失'))
   const reveal = actionMenus(tree)[0].props.items.find((item) => item.key === 'reveal')
   assert.equal(reveal.disabled, true)
-  assert.equal(reveal.ariaLabel, '在 Finder 中显示 — 原工作区已不存在')
+  assert.equal(reveal.ariaLabel, '在文件管理器中显示 — 原工作区已不存在')
   buttonByText(tree, '恢复').props.onClick()
   const afterClick = await mini.settle(section.component)
   const dialog = dialogOfKind(afterClick, 'orphan')
@@ -746,7 +749,8 @@ test('a partially failed delete-all reports both the removed and failed counts',
   assert.ok(dialog !== undefined)
   dialog.props.onConfirm()
   await new Promise((resolve) => setTimeout(resolve, 20))
-  assert.equal(client.toasts.at(-1).text, '已永久删除 1 个会话，1 个未能删除')
+  assert.equal(client.toasts.at(-1).text, '批量删除完成：成功 1 个，失败 1 个。')
+  assert.equal(client.toasts.at(-1).success, false)
   assert.equal(client.toasts.at(-1).success, false)
 })
 
@@ -1086,7 +1090,12 @@ test('a thrown automatic cleanup shows its error in the warning banner', async (
   const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
   const tree = await mini.settle(section.component)
   const text = textOf(tree)
-  assert.ok(text.some((value) => value.includes('上次自动清理失败：index unavailable')))
+  assert.ok(text.some((value) => value.includes('上次自动清理失败，请稍后在本页重试。')))
+  let errorBanner
+  walk(tree, (element) => {
+    if (errorBanner === undefined && element.props.title === 'index unavailable') errorBanner = element
+  })
+  assert.ok(errorBanner !== undefined)
   const retry = buttonByText(tree, '立即重试')
   assert.ok(retry !== undefined)
   retry.props.onClick()
@@ -1130,7 +1139,7 @@ test('revealing the original workspace posts the session and reports success', a
   await new Promise((resolve) => setTimeout(resolve, 20))
   const call = client.calls.find((entry) => entry.pathname === REVEAL_ROUTE)
   assert.deepEqual(JSON.parse(call.options.body), { sessionId: 'session-alpha' })
-  assert.equal(client.toasts.at(-1).text, '已在 Finder 中显示原工作区')
+  assert.equal(client.toasts.at(-1).text, '已在文件管理器中显示原工作区')
 })
 
 test('forgetting a missing record asks for confirmation and removes it', async () => {
@@ -1298,4 +1307,48 @@ test('a stalled write times out with a localized message and releases the gate',
   } finally {
     globalThis.setTimeout = originalSetTimeout
   }
+})
+
+test('a cleanup that deletes nothing but fails reports a failure Toast', async () => {
+  const { factory, mini } = await loadModule()
+  const client = createClient(factory, mini, statePayload(), {
+    [CLEANUP_ROUTE]: { body: { ok: true, purged: 0, failed: 2, settled: 0 } },
+  })
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+  buttonByText(tree, '清理已过期').props.onClick()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(client.toasts.at(-1).text, '清理失败：还有 2 个过期会话没有删除。')
+  assert.equal(client.toasts.at(-1).success, false)
+})
+
+test('a successful retry clears the failed reveal row error', async () => {
+  const { factory, mini } = await loadModule()
+  let attempts = 0
+  const client = createClient(factory, mini, statePayload(), {
+    [REVEAL_ROUTE]: () => {
+      attempts += 1
+      if (attempts === 1) return { status: 500, body: { ok: false, error: { code: 'REVEAL_FAILED' } } }
+      return { status: 200, body: { ok: true, opened: true } }
+    },
+  })
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  let tree = await mini.settle(section.component)
+  const reveal = () => actionMenus(tree)[0].props.items.find((item) => item.key === 'reveal')
+  reveal().onSelect()
+  tree = await mini.settle(section.component)
+  assert.ok(textOf(tree).some((value) => value.includes('上次错误：无法打开原工作区。')))
+
+  reveal().onSelect()
+  tree = await mini.settle(section.component)
+  assert.equal(client.toasts.at(-1).text, '已在文件管理器中显示原工作区')
+  assert.equal(textOf(tree).some((value) => value.includes('上次错误：')), false)
+})
+
+test('an entry without a measured size shows an unknown size instead of zero', async () => {
+  const { factory, mini } = await loadModule()
+  const client = createClient(factory, mini, statePayloadWith([makeEntry({ sizeBytes: null })]))
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+  assert.ok(textOf(tree).some((value) => value.includes('—')))
 })
