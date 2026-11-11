@@ -114,13 +114,15 @@ npm 安装的插件在「插件」页打开「会话回收站」的详情，展�
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `GET` | `/state` | 配置、索引状态、条目、统计和清理诊断；打开页面时可能触发一次节流清理 |
+| `GET` | `/state` | 配置、索引状态、条目、统计和清理诊断（只读，不触发清理） |
+| `POST` | `/sweep` | 无请求体，按节流执行一次页面维护扫描；回收站页面打开时调用，是否删除过期条目由 `enableAutoCleanup` 决定 |
 | `POST` | `/preflight` | `{ sessionId }` 返回 `{ eligible: true, descendants }` 或 `{ eligible: false, code, message, details? }`；`descendants` 是一并移入的隐藏子会话数 |
 | `POST` | `/trash` | `{ sessionId }`，移动整棵会话树（父会话 + 隐藏 subagent 子会话），返回 `{ ok, entry }` |
 | `POST` | `/restore` | `{ sessionId, mode: 'normal' \| 'orphan' }` |
 | `POST` | `/purge` | `{ sessionId }`，永久删除会话日志 |
 | `POST` | `/purge-all` | 无请求体，永久删除回收站中的全部条目；`missing` 记录仅移除索引；返回 `{ ok, purged, forgotten, failed }` |
 | `POST` | `/forget` | `{ sessionId }`，仅移除 `missing` 条目的索引记录 |
+| `POST` | `/orphans/forget` | 无请求体，删除不含会话日志的空无主对象目录；返回 `{ ok, removed }` |
 | `POST` | `/reveal` | `{ sessionId }`，打开原工作区 |
 | `POST` | `/cleanup` | 无请求体，手动执行一次清理 |
 | `POST` | `/rebuild` | 无请求体，仅在索引保护模式下重建 |
@@ -166,11 +168,12 @@ npm 安装的插件在「插件」页打开「会话回收站」的详情，展�
 - 孤儿恢复不会重建原工作区目录，也不会重新挂到工作区。
 - 归档和置顶状态会跨回收、恢复保留，回收站页面不管理这两个集合。
 - 永久删除只删除会话日志。附件、图片、投影缓存和搜索索引不会被删除。
+- 无主对象（`meta.json` 损坏或无法识别的对象目录）不会自动删除；页面只能清理其中不含会话日志的空目录，可能含日志的需要人工处理。
 - `/state` 一次返回全部条目摘要，页面在客户端搜索、筛选和分页。
 - 没有跨窗口实时推送。另一个窗口的变更要等刷新或窗口重新获得焦点后出现。
 - Windows/Linux 的桌面版尚未手动验证；CI 用 npm 安装的 `dsh web` 覆盖真实 Host 行为，但桌面壳 UI 与桌面专属能力（例如「在文件管理器中显示」）仍只在 macOS 上验证。Windows 上依赖 POSIX 权限位的用例会跳过；超过 260 字符的长路径和符号链接复制受系统设置影响，对应用例在不支持时自动跳过。
 - macOS 的路径比较按大小写不敏感处理。在大小写敏感的 APFS 卷上，仅大小写不同的两个路径会被视为同一位置。
-- 多个 DSH 进程共享同一个 `DSH_HOME` 时，回收站操作通过 `.lock` 串行；进程暂停超过 10 分钟后，锁可能被另一个进程接管。
+- 多个 DSH 进程共享同一个 `DSH_HOME` 时，回收站操作通过 `.lock` 串行；Host 在报 `LOCKED` 前会短暂重试，客户端也会自动重试一次；进程暂停超过 10 分钟后，锁可能被另一个进程接管。
 
 ## 开发
 

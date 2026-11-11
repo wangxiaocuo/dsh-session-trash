@@ -6,12 +6,20 @@
 
 ### Added
 
+- 回收站页可以清理不含会话日志的空无主对象（`POST /orphans/forget`）；可能含日志的无主对象继续保留，供人工处理。
+
 - CI 增加 `lib/**` 覆盖率门槛（行 85 / 分支 70 / 函数 84）和 README 的 CI badge。
 - 新增 tag 触发的 release workflow：typecheck、单测、smoke、真实 Host e2e 通过后 `npm publish --provenance` 并创建 GitHub Release；使用 npm Trusted Publishing，无需 `NPM_TOKEN`。
 
 ### Changed
 
+- `GET /state` 改为纯只读；页面打开时由客户端显式调用 `POST /sweep` 触发节流维护，读请求不再可能触发永久删除。
+- 锁竞争：Host 在报 `LOCKED` 前短暂重试，客户端对 `LOCKED` 自动重试一次；`trash()` 的 lineage/preflight 移到锁外，缩短持锁时间。
 - 收紧 `lib/errors.js` 和 `lib/fsops.js` 的类型（`any` 换成 `unknown` 与具体形状）。
+
+### Tests
+
+- 覆盖页面维护扫描（成功/节流/失败）、空无主对象清理、锁重试和客户端 LOCKED 重试。
 
 ## [0.6.4] - 2026-11-11
 

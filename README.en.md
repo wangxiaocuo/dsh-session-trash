@@ -115,13 +115,15 @@ All routes live under `/plugins/dsh-session-trash/api/` and are registered as ex
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/state` | Config, index state, entries, stats, and cleanup diagnostics; may schedule a throttled page-open cleanup |
+| `GET` | `/state` | Config, index state, entries, stats, and cleanup diagnostics (read-only; never sweeps) |
+| `POST` | `/sweep` | No body; runs one throttled page-open maintenance sweep; whether expired entries are deleted depends on `enableAutoCleanup` |
 | `POST` | `/preflight` | `{ sessionId }` returns `{ eligible: true, descendants }` or `{ eligible: false, code, message, details? }`; `descendants` is the number of hidden children that move along |
 | `POST` | `/trash` | `{ sessionId }`; moves the whole session tree (parent plus hidden subagent children) and returns `{ ok, entry }` |
 | `POST` | `/restore` | `{ sessionId, mode: 'normal' \| 'orphan' }` |
 | `POST` | `/purge` | `{ sessionId }`; permanently deletes the session log |
 | `POST` | `/purge-all` | No body; permanently deletes every entry in the trash, dropping `missing` index records only; returns `{ ok, purged, forgotten, failed }` |
 | `POST` | `/forget` | `{ sessionId }`; removes only a `missing` index entry |
+| `POST` | `/orphans/forget` | No body; removes empty unindexed object directories that hold no session log; returns `{ ok, removed }` |
 | `POST` | `/reveal` | `{ sessionId }`; opens the original workspace |
 | `POST` | `/cleanup` | No body; runs one cleanup sweep |
 | `POST` | `/rebuild` | No body; rebuilds the index only in protection mode |
@@ -167,11 +169,12 @@ The index schema is v2; a v1 index is upgraded automatically on startup and pres
 - Orphan restore never recreates the original workspace directory and never reattaches the session to a workspace.
 - Archive and pin state survive trash and restore. The Trash page does not manage either set.
 - Permanent deletion removes the session log only. Attachments, images, projection-cache rows, and search-index rows are not deleted.
+- Unindexed objects (object directories whose `meta.json` is damaged or unreadable) are never deleted automatically; the page can only clean empty leftovers that hold no session log, and anything that may contain logs is left for manual inspection.
 - `/state` returns all entry summaries in one response. Search, filtering, and paging happen in the Client.
 - There is no cross-window live push. Another window's change appears after a refresh or when the window regains focus.
 - The desktop apps on Windows and Linux have not been verified manually; CI boots an npm-installed `dsh web` Host, so desktop-shell UI and desktop-only features (such as reveal in the file manager) are still verified on macOS only. On Windows, cases that rely on POSIX permission bits are skipped, and long paths over 260 characters / symlink copying depend on system configuration (the related tests skip themselves when unsupported).
 - macOS path comparison is case-insensitive. On a case-sensitive APFS volume, paths that differ only by case are treated as the same location.
-- Multiple DSH processes sharing one `DSH_HOME` serialize trash operations through `.lock`. A process paused for more than 10 minutes can lose the lock to another process.
+- Multiple DSH processes sharing one `DSH_HOME` serialize trash operations through `.lock`. The Host retries briefly before reporting `LOCKED`, and the Client retries once automatically; a process paused for more than 10 minutes can lose the lock to another process.
 
 ## Development
 
