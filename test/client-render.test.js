@@ -324,6 +324,8 @@ const REBUILD_ROUTE = '/plugins/dsh-session-trash/api/rebuild'
 const CLEANUP_ROUTE = '/plugins/dsh-session-trash/api/cleanup'
 const REVEAL_ROUTE = '/plugins/dsh-session-trash/api/reveal'
 const FORGET_ROUTE = '/plugins/dsh-session-trash/api/forget'
+const SWEEP_ROUTE = '/plugins/dsh-session-trash/api/sweep'
+const ORPHANS_ROUTE = '/plugins/dsh-session-trash/api/orphans/forget'
 
 const DAY = 86_400_000
 
@@ -1351,4 +1353,57 @@ test('an entry without a measured size shows an unknown size instead of zero', a
   const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
   const tree = await mini.settle(section.component)
   assert.ok(textOf(tree).some((value) => value.includes('—')))
+})
+
+test('the first successful load asks for one maintenance sweep', async () => {
+  const { factory, mini } = await loadModule()
+  const client = createClient(factory, mini, statePayload())
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  await mini.settle(section.component)
+  assert.equal(client.calls.filter((entry) => entry.pathname === SWEEP_ROUTE).length, 1)
+})
+
+test('an unindexed banner offers a safe cleanup for empty leftovers', async () => {
+  const { factory, mini } = await loadModule()
+  const payload = statePayload()
+  payload.index = { status: 'ok', updatedAt: Date.now(), error: null, unindexed: 2 }
+  const client = createClient(factory, mini, payload, {
+    [ORPHANS_ROUTE]: { status: 200, body: { ok: true, removed: 2 } },
+  })
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+  assert.ok(textOf(tree).some((value) => value.includes('2 个未索引对象')))
+  const clean = buttonByText(tree, '清理空目录')
+  assert.ok(clean !== undefined)
+  clean.props.onClick()
+  const afterClick = await mini.settle(section.component)
+  const dialog = dialogOfKind(afterClick, 'orphans')
+  assert.ok(dialog !== undefined)
+  assert.equal(client.calls.filter((entry) => entry.pathname === ORPHANS_ROUTE).length, 0)
+  dialog.props.onConfirm()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  const call = client.calls.find((entry) => entry.pathname === ORPHANS_ROUTE)
+  assert.ok(call !== undefined)
+  assert.equal(call.options.method, 'POST')
+  assert.equal(client.toasts.at(-1).text, '已清理 2 个空的无主对象')
+  assert.equal(client.toasts.at(-1).success, true)
+})
+
+test('a LOCKED write is retried once before reporting success', async () => {
+  const { factory, mini } = await loadModule()
+  let attempts = 0
+  const client = createClient(factory, mini, statePayload(), {
+    [RESTORE_ROUTE]: () => {
+      attempts += 1
+      if (attempts === 1) return { status: 409, body: { ok: false, error: { code: 'LOCKED' } } }
+      return { status: 200, body: { ok: true, session: { sessionId: 'session-alpha', title: 'Alpha', orphan: false } } }
+    },
+  })
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+  buttonByText(tree, '恢复').props.onClick()
+  await new Promise((resolve) => setTimeout(resolve, 1200))
+  assert.equal(client.calls.filter((entry) => entry.pathname === RESTORE_ROUTE).length, 2)
+  assert.equal(client.toasts.at(-1).text, '已恢复「Alpha」')
+  assert.equal(client.toasts.at(-1).success, true)
 })

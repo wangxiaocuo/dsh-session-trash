@@ -791,6 +791,17 @@ try {
   assert.equal(afterForget.body.entries.some((entry) => entry.sessionId === forgetId), false)
   pass('forget only a missing entry, without deleting session files')
 
+  // --- Empty unindexed leftovers can be cleaned --------------------------
+  const orphanId = '20260101T000000-orphan01'
+  const orphanDir = path.join(home, '.session-trash', 'objects', orphanId)
+  await fs.mkdir(orphanDir, { recursive: true })
+  await fs.writeFile(path.join(orphanDir, 'meta.json'), '{ broken')
+  const orphanCleanup = await api.call('orphans/forget', { method: 'POST' })
+  assert.equal(orphanCleanup.status, 200)
+  assert.equal(orphanCleanup.body.removed >= 1, true)
+  await assert.rejects(fs.stat(orphanDir))
+  pass('empty unindexed leftovers are cleaned')
+
   // --- Permanent purge ----------------------------------------------------
   const purgeTrashed = await api.call('trash', { method: 'POST', body: { sessionId: purgeId } })
   assert.equal(purgeTrashed.status, 200)

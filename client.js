@@ -126,6 +126,13 @@ window.__ModuleLoader__.load({
       corruptBanner: '回收站索引损坏，已进入保护模式。现有会话不会被自动修改。',
       recoveredBanner: '回收站索引已从备份恢复。',
       unindexedBanner: '回收站目录中有 {count} 个未索引对象，插件不会自动删除它们。',
+      orphansClean: '清理空目录',
+      orphansTitle: '清理空的无主对象？',
+      orphansBody: '只删除回收站中不含会话日志的残留目录；可能含日志的无主对象会保留。',
+      orphansConfirm: '清理空目录',
+      orphansDoneOne: '已清理 {count} 个空的无主对象',
+      orphansDoneOther: '已清理 {count} 个空的无主对象',
+      orphansNone: '没有可安全清理的空目录',
       rebuild: '尝试重建索引',
       rebuilding: '正在重建…',
       rebuildDone: '索引已重建，共 {count} 个条目',
@@ -281,6 +288,13 @@ window.__ModuleLoader__.load({
       corruptBanner: 'The trash index is damaged, so protection mode is on. No session is changed automatically.',
       recoveredBanner: 'The trash index was recovered from its backup.',
       unindexedBanner: 'The trash directory holds {count} unindexed objects. The plugin will not delete them.',
+      orphansClean: 'Clean empty leftovers',
+      orphansTitle: 'Remove empty unindexed objects?',
+      orphansBody: 'Only leftover directories without session logs are removed; unindexed objects that may contain logs are kept.',
+      orphansConfirm: 'Clean empty objects',
+      orphansDoneOne: 'Removed {count} empty unindexed object',
+      orphansDoneOther: 'Removed {count} empty unindexed objects',
+      orphansNone: 'No empty leftovers to clean',
       rebuild: 'Try rebuilding the index',
       rebuilding: 'Rebuilding…',
       rebuildDone: 'Index rebuilt with {count} entries',
@@ -1102,6 +1116,10 @@ window.__ModuleLoader__.load({
         heading = format(t('purgeAllTitle'), { count })
         body = t('purgeAllBody')
         confirmLabel = t('purgeAllConfirm')
+      } else if (kind === 'orphans') {
+        heading = t('orphansTitle')
+        body = t('orphansBody')
+        confirmLabel = t('orphansConfirm')
       } else {
         heading = t('forgetTitle')
         body = t('forgetBody')
@@ -1164,6 +1182,7 @@ window.__ModuleLoader__.load({
         const [cleaning, setCleaning] = React.useState(false)
         const [rebuilding, setRebuilding] = React.useState(false)
         const [purgingAll, setPurgingAll] = React.useState(false)
+        const [forgettingOrphans, setForgettingOrphans] = React.useState(false)
         const [announcement, setAnnouncement] = React.useState('')
         const [clock, setClock] = React.useState(() => Date.now())
         const [query, setQuery] = React.useState('')
@@ -1178,6 +1197,8 @@ window.__ModuleLoader__.load({
         const activeWritesRef = React.useRef(0)
         /** Abort scopes of in-flight writes, all cancelled on unmount. */
         const writeScopesRef = React.useRef(new Set())
+        /** The page-open sweep is requested once per mounted section. */
+        const pageSweepRef = React.useRef(false)
         const closeDialog = React.useCallback(() => setDialog(null), [])
 
         /**
@@ -1279,7 +1300,7 @@ window.__ModuleLoader__.load({
          *   | { kind: 'network' }
          * >} the outcome.
          */
-        async function sendMutation(pathname, body) {
+        async function sendMutationOnce(pathname, body) {
           const scope = openWriteScope()
           try {
             const { status, ok, payload } = await requestJson(pathname, { method: 'POST', body, signal: scope.signal })
@@ -1291,6 +1312,30 @@ window.__ModuleLoader__.load({
           } finally {
             scope.close()
           }
+        }
+
+        /**
+         * Send one write request. A LOCKED answer means the Host rejected the
+         * call before touching anything, so it is safe to retry once after a
+         * short jitter instead of surfacing a spurious failure.
+         *
+         * @param {string} pathname endpoint below the API prefix.
+         * @param {object} [body] JSON request body.
+         * @returns {Promise<any>} the outcome, see {@link sendMutationOnce}.
+         */
+        async function sendMutation(pathname, body) {
+          let outcome = await sendMutationOnce(pathname, body)
+          if (outcome.kind === 'response' && outcome.ok === false) {
+            const code =
+              outcome.payload !== null && outcome.payload !== undefined && outcome.payload.error !== undefined
+                ? outcome.payload.error.code
+                : undefined
+            if (code === 'LOCKED') {
+              await new Promise((resolve) => setTimeout(resolve, 350 + Math.floor(Math.random() * 350)))
+              outcome = await sendMutationOnce(pathname, body)
+            }
+          }
+          return outcome
         }
 
         /**
@@ -1328,6 +1373,12 @@ window.__ModuleLoader__.load({
               }
               setView({ status: 'ready', data: payload, error: null })
               setRowErrors({})
+              // Read-only /state never deletes; ask the Host for the throttled
+              // maintenance sweep explicitly, once per mounted page.
+              if (!pageSweepRef.current) {
+                pageSweepRef.current = true
+                requestJson('sweep', { method: 'POST' }).catch(() => {})
+              }
             })
             .catch(() => {
               if (controller.signal.aborted) {
@@ -1415,7 +1466,8 @@ window.__ModuleLoader__.load({
         const loading = view.status === 'loading'
         const refreshing = view.status === 'refreshing'
         const readsBusy = loading || refreshing
-        const pendingCount = pendingRows.size + (cleaning ? 1 : 0) + (purgingAll ? 1 : 0) + (rebuilding ? 1 : 0)
+        const pendingCount =
+          pendingRows.size + (cleaning ? 1 : 0) + (purgingAll ? 1 : 0) + (rebuilding ? 1 : 0) + (forgettingOrphans ? 1 : 0)
         /** Any write (row action or maintenance) is in flight. */
         const mutationBusy = pendingCount > 0
         const corrupt = data !== null && data.index !== undefined && data.index.status === 'corrupt'
@@ -1759,6 +1811,39 @@ window.__ModuleLoader__.load({
         }
 
         /**
+         * Remove empty unindexed object directories. They contain no session
+         * log, only leftover plugin metadata, so this is safe to offer.
+         *
+         * @returns {Promise<void>} completion of the operation.
+         */
+        async function performPurgeOrphans() {
+          if (!beginWrite()) return
+          setForgettingOrphans(true)
+          try {
+            const outcome = await sendMutation('orphans/forget')
+            if (!aliveRef.current || outcome.kind === 'cancelled') return
+            if (outcome.kind !== 'response') {
+              ctx.contextMenus.notify(transportMessage(outcome.kind), false)
+              return
+            }
+            if (!outcome.ok) {
+              ctx.contextMenus.notify(describeActionFailure(outcome.status, outcome.payload, t), false)
+              return
+            }
+            const payload = outcome.payload
+            const removed =
+              payload !== null && payload !== undefined && typeof payload.removed === 'number' ? payload.removed : 0
+            const message = removed > 0 ? countText(t, 'orphansDone', removed) : t('orphansNone')
+            bumpRevision()
+            ctx.contextMenus.notify(message, removed > 0)
+            announce(message)
+          } finally {
+            endWrite()
+            if (aliveRef.current) setForgettingOrphans(false)
+          }
+        }
+
+        /**
          * @param {object} entry wire entry.
          * @param {string} key menu identity.
          * @returns {object} one menu item.
@@ -1918,6 +2003,16 @@ window.__ModuleLoader__.load({
               'div',
               { className: 'dsh-trash__banner dsh-trash__banner--info', role: 'status', key: 'unindexed' },
               h('span', { className: 'dsh-trash__bannerText' }, format(t('unindexedBanner'), { count: unindexed })),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'dsh-trash__button',
+                  onClick: () => setDialog({ kind: 'orphans' }),
+                  disabled: loading || mutationBusy,
+                },
+                t('orphansClean'),
+              ),
             ),
           )
         }
@@ -2310,6 +2405,7 @@ window.__ModuleLoader__.load({
                   if (current.kind === 'orphan') void performRestore(current.entry, 'orphan')
                   else if (current.kind === 'purge') void performPurge(current.entry)
                   else if (current.kind === 'purgeAll') void performPurgeAll()
+                  else if (current.kind === 'orphans') void performPurgeOrphans()
                   else void performForget(current.entry)
                 },
               })

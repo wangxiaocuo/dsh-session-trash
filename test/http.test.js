@@ -59,7 +59,7 @@ function createRequest({ method = 'POST', headers = {}, body = '' } = {}) {
 function createApi(options = {}) {
   const routes = new Map()
   const calls = []
-  const pageOpens = []
+  
   const ctx = {
     connection: {
       requestRejection() {
@@ -117,6 +117,11 @@ function createApi(options = {}) {
       if (options.rebuild !== undefined) return options.rebuild()
       return { entries: 2, unindexed: 1 }
     },
+    async purgeEmptyOrphans() {
+      calls.push(['purgeEmptyOrphans'])
+      if (options.orphans !== undefined) return options.orphans()
+      return { removed: 2 }
+    },
   }
   const cleanupService = {
     async runNow(input) {
@@ -124,8 +129,10 @@ function createApi(options = {}) {
       if (options.cleanup !== undefined) return options.cleanup(input)
       return { purged: 2, failed: 0 }
     },
-    maybeSweepOnPageOpen() {
-      pageOpens.push(Date.now())
+    async sweepOnPageOpen() {
+      calls.push(['sweep'])
+      if (options.sweep !== undefined) return options.sweep()
+      return { ran: true, result: { purged: 1, failed: 0, changed: 0 } }
     },
     ...(options.cleanupDiagnostics === undefined
       ? {}
@@ -155,7 +162,6 @@ function createApi(options = {}) {
   return {
     calls,
     routes,
-    pageOpens,
     async call(pathname, { method = 'POST', headers = {}, body = '' } = {}) {
       const handler = routes.get(`${API_PREFIX}/${pathname}`)
       assert.ok(handler !== undefined, `route ${pathname} registered`)
@@ -178,14 +184,37 @@ const JSON_HEADERS = {
   'x-dsh-session-trash': '1',
 }
 
-test('GET /state returns the state projection and schedules a page-open sweep', async () => {
-  const { call, pageOpens } = createApi()
+test('GET /state returns the state projection without running a sweep', async () => {
+  const { call, calls } = createApi()
   const result = await call('state', { method: 'GET', headers: { host: '127.0.0.1:3080' } })
   assert.equal(result.status, 200)
   assert.equal(result.body.version, 1)
   assert.equal(result.body.trashRootDisplay, '$DSH_HOME/.session-trash')
   assert.equal(result.headers['cache-control'], 'no-store')
-  assert.equal(pageOpens.length, 1)
+  assert.deepEqual(calls, [])
+})
+
+test('POST /sweep runs the throttled maintenance sweep', async () => {
+  const { call, calls } = createApi()
+  const result = await call('sweep', { headers: JSON_HEADERS })
+  assert.equal(result.status, 200)
+  assert.equal(result.body.ok, true)
+  assert.equal(result.body.ran, true)
+  assert.equal(result.body.purged, 1)
+  assert.deepEqual(calls, [['sweep']])
+
+  const throttled = createApi({ sweep: async () => ({ ran: false, reason: 'throttled' }) })
+  const second = await throttled.call('sweep', { headers: JSON_HEADERS })
+  assert.equal(second.body.ran, false)
+  assert.equal(second.body.reason, 'throttled')
+})
+
+test('POST /orphans/forget removes empty unindexed objects', async () => {
+  const { call, calls } = createApi()
+  const result = await call('orphans/forget', { headers: JSON_HEADERS })
+  assert.equal(result.status, 200)
+  assert.deepEqual(result.body, { ok: true, removed: 2 })
+  assert.deepEqual(calls, [['purgeEmptyOrphans']])
 })
 
 test('POST /trash requires the CSRF header and owner identity', async () => {

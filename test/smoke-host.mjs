@@ -146,9 +146,20 @@ async function bootPlugin(home) {
  * @returns {string[]} the route names this plugin must expose.
  */
 function expectedRoutes() {
-  return ['state', 'preflight', 'trash', 'restore', 'purge', 'purge-all', 'forget', 'reveal', 'cleanup', 'rebuild'].map(
-    (name) => `/plugins/dsh-session-trash/api/${name}`,
-  )
+  return [
+    'state',
+    'sweep',
+    'preflight',
+    'trash',
+    'restore',
+    'purge',
+    'purge-all',
+    'forget',
+    'orphans/forget',
+    'reveal',
+    'cleanup',
+    'rebuild',
+  ].map((name) => `/plugins/dsh-session-trash/api/${name}`)
 }
 
 /**
@@ -286,6 +297,14 @@ async function main() {
     )
     assert.deepEqual(afterPurge.entries, [])
     assert.deepEqual(await fs.readdir(path.join(prepared.home, '.session-trash', 'objects')), [])
+
+    const sweep = await call(routes, 'sweep', { method: 'POST', headers: jsonHeaders })
+    assert.equal(sweep.status, 200)
+    assert.equal(sweep.body.ok, true)
+
+    const orphans = await call(routes, 'orphans/forget', { method: 'POST', headers: jsonHeaders })
+    assert.equal(orphans.status, 200)
+    assert.equal(orphans.body.removed, 0)
 
     const cleanup = await call(routes, 'cleanup', { method: 'POST', headers: jsonHeaders })
     assert.equal(cleanup.status, 200)

@@ -339,6 +339,49 @@ test('a read-only trash root reports IO_ERROR without touching the session', asy
   await harness.dispose()
 })
 
+test('empty unindexed objects can be removed without touching session payloads', async () => {
+  const harness = await createHarness()
+  const project = path.join(harness.root, 'project')
+  await fs.mkdir(project)
+  await harness.addSession({ id: 'session-a', cwd: project, title: 'A' })
+  const indexed = await harness.service.trash('session-a')
+
+  const objectsDir = harness.store.objectsDir
+  const emptyId = '20260101T000000-emptyaaa'
+  const emptyDir = path.join(objectsDir, emptyId)
+  await fs.mkdir(emptyDir, { recursive: true })
+  await fs.writeFile(path.join(emptyDir, 'meta.json'), '{ broken')
+
+  const payloadId = '20260101T000000-payloaaa'
+  const payloadDir = path.join(objectsDir, payloadId)
+  await fs.mkdir(path.join(payloadDir, 'session'), { recursive: true })
+  await fs.writeFile(path.join(payloadDir, 'session', 'session.v4.jsonl'), 'log')
+
+  const result = await harness.service.purgeEmptyOrphans()
+  assert.equal(result.removed, 1)
+  await assert.rejects(fs.stat(emptyDir))
+  assert.equal((await fs.stat(payloadDir)).isDirectory(), true)
+  assert.equal((await fs.stat(harness.store.objectDir(indexed.trashId))).isDirectory(), true)
+  assert.equal(harness.store.findEntry('session-a')?.state, 'trashed')
+  assert.equal(harness.store.describe().unindexed, 1)
+  await harness.dispose()
+})
+
+test('empty unindexed cleanup refuses protection mode', async () => {
+  const harness = await createHarness()
+  const objectsDir = harness.store.objectsDir
+  const emptyId = '20260101T000000-emptybbb'
+  await fs.mkdir(path.join(objectsDir, emptyId), { recursive: true })
+  const indexPath = path.join(harness.trashRoot, 'trash-index.json')
+  await fs.writeFile(indexPath, '{ broken')
+  await fs.writeFile(`${indexPath}.bak`, '{ also broken')
+  await harness.store.init()
+  assert.equal(harness.store.isProtected(), true)
+  await assert.rejects(harness.service.purgeEmptyOrphans(), trashCode('INDEX_CORRUPT'))
+  assert.equal((await fs.stat(path.join(objectsDir, emptyId))).isDirectory(), true)
+  await harness.dispose()
+})
+
 test('an object-creation failure maps to IO_ERROR without touching the session', async () => {
   const harness = await createHarness()
   const project = path.join(harness.root, 'project')

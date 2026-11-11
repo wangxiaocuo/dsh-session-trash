@@ -446,13 +446,26 @@ test('cleanup service schedules activation and interval sweeps', async () => {
 
 test('cleanup service throttles page-open sweeps', async () => {
   const { service, calls } = createCleanup(async () => ({ purged: 0, failed: 0 }))
-  service.maybeSweepOnPageOpen()
+  const first = await service.sweepOnPageOpen()
   await flush()
+  assert.equal(first.ran, true)
   assert.equal(calls.length, 1)
   assert.equal(calls[0].reason, 'page-open')
-  service.maybeSweepOnPageOpen()
-  await flush()
+  const second = await service.sweepOnPageOpen()
+  assert.equal(second.ran, false)
+  assert.equal(second.reason, 'throttled')
   assert.equal(calls.length, 1)
+  service.stop()
+})
+
+test('a failed page-open sweep is reported without throwing', async () => {
+  const { service } = createCleanup(async () => {
+    throw new Error('disk is busy')
+  })
+  const outcome = await service.sweepOnPageOpen()
+  assert.equal(outcome.ran, false)
+  assert.equal(outcome.reason, 'failed')
+  assert.equal(service.diagnostics().consecutiveFailures, 1)
   service.stop()
 })
 
