@@ -15,7 +15,9 @@ Status: feature complete. CI (GitHub Actions) runs the unit tests, the Host smok
 - Right-click a session in the sidebar and choose "Move to trash". It is available for cold sessions with no running turn, job, subagent, or scheduled task; hidden subagent children move with their parent and are restored together.
 - For sessions that are still open, still running work, or own visible child sessions, the menu keeps a labelled explanatory "Move to trash" item that states why the move is unavailable instead of hiding the entry entirely.
 - After the move, the shared DSH Toast offers one action: Undo. Undo tries a normal restore first and falls back to an orphan restore when the original workspace is gone.
-- The Trash page in Settings shows title, Session ID, original workspace, trashed date, remaining days, size, and status. The list supports search, filters, and paging at 50 rows per page.
+- The Trash page in Settings shows title, Session ID, original workspace, trashed date, remaining days, size, and status. The list supports search, filters, sorting by trashed date/title/size/expiry, and paging at 50 rows per page.
+- Entries with hidden sub-sessions show a count badge and can expand to list every member (parent/child session IDs and sizes); restore and permanent deletion still operate on the whole tree.
+- Select multiple entries to restore them as a batch (only rows whose workspace still exists), including a select-all-page checkbox.
 - Row actions include restore, restore as orphan, permanent deletion, removal from the index, copying the Session ID, and revealing the original workspace in Finder or Explorer.
 - The toolbar's "Delete all permanently" empties the whole trash after one confirmation: it deletes every trashed session log and drops file-missing records from the index. Attachments, images, and search-index rows are not deleted.
 - Cleanup keeps entries for 30 days by default and runs every 6 hours. It also runs shortly after activation and when the Trash page opens. Failed cleanup runs are retried with exponential backoff, and the page shows the failure.
@@ -171,7 +173,8 @@ The index schema is v2; a v1 index is upgraded automatically on startup and pres
 - Permanent deletion removes the session log only. Attachments, images, projection-cache rows, and search-index rows are not deleted.
 - Unindexed objects (object directories whose `meta.json` is damaged or unreadable) are never deleted automatically; the page can only clean empty leftovers that hold no session log, and anything that may contain logs is left for manual inspection.
 - `/state` returns all entry summaries in one response. Search, filtering, and paging happen in the Client.
-- There is no cross-window live push. Another window's change appears after a refresh or when the window regains focus.
+- Same-origin tabs in the same browser sync index changes through `BroadcastChannel`; different browsers or machines still need a refresh.
+- Batch restore only covers rows whose workspace still exists; entries with a missing workspace need an individual orphan restore.
 - The desktop apps on Windows and Linux have not been verified manually; CI boots an npm-installed `dsh web` Host, so desktop-shell UI and desktop-only features (such as reveal in the file manager) are still verified on macOS only. On Windows, cases that rely on POSIX permission bits are skipped, and long paths over 260 characters / symlink copying depend on system configuration (the related tests skip themselves when unsupported).
 - macOS path comparison is case-insensitive. On a case-sensitive APFS volume, paths that differ only by case are treated as the same location.
 - Multiple DSH processes sharing one `DSH_HOME` serialize trash operations through `.lock`. The Host retries briefly before reporting `LOCKED`, and the Client retries once automatically; a process paused for more than 10 minutes can lose the lock to another process.
