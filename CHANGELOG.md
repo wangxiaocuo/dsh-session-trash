@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-11-11
+
 ### Added
 
 - 回收站页支持按移入时间、标题、大小、到期时间排序，可勾选多个条目批量恢复（只含工作区仍存在的条目），并支持全选当前页。
@@ -122,6 +124,7 @@
 
 - 回收站工具栏的「永久删除全部」与二次确认；`missing` 记录只移出索引，不删除会话文件。
 
+[0.6.6]: https://github.com/wangxiaocuo/dsh-session-trash/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/wangxiaocuo/dsh-session-trash/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/wangxiaocuo/dsh-session-trash/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/wangxiaocuo/dsh-session-trash/compare/v0.6.2...v0.6.3
