@@ -41,6 +41,16 @@ test('metricsMatch allows absent metrics and rejects a size difference', () => {
   assert.equal(metricsMatch({ sizeBytes: 1, fileCount: 1 }, { sizeBytes: 1, fileCount: 1 }), true)
   assert.equal(metricsMatch({ sizeBytes: 2, fileCount: 1 }, { sizeBytes: 1, fileCount: 1 }), false)
   assert.equal(metricsMatch({ sizeBytes: 1, fileCount: 2 }, { sizeBytes: 1, fileCount: 1 }), false)
+  // A recorded symlink count catches a copy that silently dropped a symlink.
+  assert.equal(
+    metricsMatch({ sizeBytes: 1, fileCount: 1, symlinkCount: 1 }, { sizeBytes: 1, fileCount: 1, symlinkCount: 1 }),
+    true,
+  )
+  assert.equal(
+    metricsMatch({ sizeBytes: 1, fileCount: 1, symlinkCount: 1 }, { sizeBytes: 1, fileCount: 1, symlinkCount: 0 }),
+    false,
+  )
+  assert.equal(metricsMatch({ sizeBytes: 1, fileCount: 1 }, { sizeBytes: 1, fileCount: 1, symlinkCount: 3 }), true)
 })
 
 test('moveDirectory renames on the same filesystem', async () => {
@@ -330,6 +340,47 @@ test('moveDirectory maps a permission-shaped rename failure to IO_ERROR', async 
   // itself must still be in place.
   assert.equal((await fs.stat(source)).isDirectory(), true)
   await fs.rm(root, { recursive: true, force: true })
+})
+
+test('a cross-device move that cannot remove the source keeps paths out of the error', async (t) => {
+  if (skipAsRoot(t, 'permission checks are meaningless as root')) return
+  if (skipOnWindows(t, 'POSIX permission bits are not enforced on Windows')) return
+  const root = await createTempDir()
+  const project = path.join(root, 'sessions', 'project')
+  const source = path.join(project, 'session-a')
+  await fs.mkdir(source, { recursive: true })
+  await fs.writeFile(path.join(source, 'session.v4.jsonl'), 'hello')
+  // Readable but not writable: the copy succeeds and the source removal fails.
+  await fs.chmod(project, 0o500)
+  const destination = path.join(root, 'trash', 'objects', 'id-1', 'session')
+  let calls = 0
+  const rename = async (from, to) => {
+    calls += 1
+    if (calls === 1) {
+      const error = new Error('cross-device link')
+      error.code = 'EXDEV'
+      throw error
+    }
+    await fs.rename(from, to)
+  }
+  try {
+    await assert.rejects(
+      moveDirectory(source, destination, null, { rename, copy: fs.cp }),
+      (error) => {
+        assert.equal(error instanceof TrashError, true)
+        assert.equal(error.code, 'IO_ERROR')
+        assert.equal(error.details.copied, true)
+        assert.equal('source' in error.details, false)
+        assert.equal('destination' in error.details, false)
+        assert.equal(JSON.stringify(error.details).includes(root), false)
+        return true
+      },
+    )
+    assert.equal(await fs.readFile(path.join(source, 'session.v4.jsonl'), 'utf8'), 'hello')
+  } finally {
+    await fs.chmod(project, 0o700)
+    await fs.rm(root, { recursive: true, force: true })
+  }
 })
 
 test('a Windows junction counts as a symlink and is never moved as a directory', async (t) => {
