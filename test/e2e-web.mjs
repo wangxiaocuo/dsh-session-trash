@@ -17,14 +17,17 @@
  *   - corrupt-index protection mode and rebuild from `meta.json`
  *   - orphan restore and Workspace detach
  *
- * Run it with plain Node; the desktop Electron binary is spawned by the script:
+ * Run it with plain Node; the Host is spawned by the script:
  *
  *   npm run test:e2e
  *
- * The executable is discovered at the platform's usual install location, or
- * from `DSH_ELECTRON`. When no desktop app is found the suite prints a skip
- * message and exits 0 instead of failing. Set `DSH_E2E_KEEP=1` to keep the
- * throwaway home and server log for inspection.
+ * By default the suite boots the installed desktop app (discovered at the
+ * platform's usual install location, or from `DSH_ELECTRON`). Set
+ * `DSH_E2E_DSH_BIN` to a npm-installed `@deepseek-ai/dsh` bin.js to boot a
+ * plain-Node Host instead; that mode works on any platform and is what CI
+ * uses. When no Host is found the suite prints a skip message and exits 0
+ * instead of failing. Set `DSH_E2E_KEEP=1` to keep the throwaway home and
+ * server log for inspection.
  *
  * The scenario that simulates a failed deletion through POSIX permission bits
  * is skipped on Windows, where those bits are not enforced.
@@ -112,16 +115,34 @@ async function resolveDshBin(electron) {
   return undefined
 }
 
-const ELECTRON = await resolveElectron()
-if (ELECTRON === undefined) {
-  console.log('e2e skipped: no DeepSeek Harness desktop found. Set DSH_ELECTRON to its executable path to run this suite.')
-  process.exit(0)
+const CLI_BIN = process.env.DSH_E2E_DSH_BIN
+
+/**
+ * @returns {Promise<{ mode: 'cli' | 'desktop', command: string, bin: string, env: Record<string, string> }>} how to boot the Host.
+ */
+async function resolveRuntime() {
+  if (typeof CLI_BIN === 'string' && CLI_BIN !== '') {
+    const bin = path.resolve(CLI_BIN)
+    if (!(await exists(bin))) {
+      console.log(`e2e skipped: DSH_E2E_DSH_BIN does not exist: ${bin}`)
+      process.exit(0)
+    }
+    return { mode: 'cli', command: process.execPath, bin, env: {} }
+  }
+  const electron = await resolveElectron()
+  if (electron === undefined) {
+    console.log('e2e skipped: no DeepSeek Harness desktop found. Set DSH_ELECTRON to its executable path to run this suite.')
+    process.exit(0)
+  }
+  const dshBin = await resolveDshBin(electron)
+  if (dshBin === undefined) {
+    console.log(`e2e skipped: cannot locate the bundled dsh CLI inside ${path.dirname(electron)}.`)
+    process.exit(0)
+  }
+  return { mode: 'desktop', command: electron, bin: dshBin, env: { ELECTRON_RUN_AS_NODE: '1' } }
 }
-const DSH_BIN = await resolveDshBin(ELECTRON)
-if (DSH_BIN === undefined) {
-  console.log(`e2e skipped: cannot locate the bundled dsh CLI inside ${path.dirname(ELECTRON)}.`)
-  process.exit(0)
-}
+
+const runtime = await resolveRuntime()
 
 /**
  * @param {string} prefix temporary-directory prefix.
@@ -292,9 +313,9 @@ async function updateIndex(home, mutate) {
  * @returns {Promise<{ child: import('node:child_process').ChildProcess, url: string, log: string }>} the server.
  */
 async function startServer(home) {
-  const child = spawn(ELECTRON, [DSH_BIN, '--profile', 'web', '--no-open', '--port', '0'], {
+  const child = spawn(runtime.command, [runtime.bin, 'web', '--no-open', '--port', '0'], {
     cwd: home,
-    env: { ...process.env, DSH_HOME: home, ELECTRON_RUN_AS_NODE: '1' },
+    env: { ...process.env, ...runtime.env, DSH_HOME: home },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   let log = ''
