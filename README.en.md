@@ -175,19 +175,14 @@ The index schema is v2; a v1 index is upgraded automatically on startup and pres
 
 ```bash
 pnpm install
-pnpm test
-npm run test:e2e
+pnpm test          # unit tests
+pnpm test:smoke    # Host smoke test (real Cordis, plain Node)
+npm run test:e2e   # real dsh web end-to-end (needs the desktop app)
 ```
+
+The Host smoke test wires the plugin into a real Cordis context through the `@deepseek-ai/cordis` devDependency, creates its own temporary `DSH_HOME`, and removes it afterwards; it does not need the desktop app. Set `DSH_SMOKE_KEEP=1` to keep the temporary home for debugging. CI (GitHub Actions) runs the unit tests, the smoke test, and a package-contents check; the end-to-end suite needs a local DeepSeek Harness desktop install and is run manually.
 
 `npm run test:e2e` boots a real `dsh web` Host in a temporary `DSH_HOME` and runs the full flow. It uses `/Applications/DeepSeek Harness.app` by default; set `DSH_ELECTRON` to another Electron executable. Set `DSH_E2E_KEEP=1` to keep the temporary home and logs.
-
-The Host smoke test needs a separate temporary `DSH_HOME`:
-
-```bash
-DSH_HOME=$(mktemp -d) ELECTRON_RUN_AS_NODE=1 \
-  "/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness" \
-  test/smoke-host.mjs
-```
 
 Project layout:
 

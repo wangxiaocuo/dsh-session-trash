@@ -174,19 +174,14 @@ npm 安装的插件在「插件」页打开「会话回收站」的详情，展�
 
 ```bash
 pnpm install
-pnpm test
-npm run test:e2e
+pnpm test          # 单元测试
+pnpm test:smoke    # Host 冒烟测试（真实 Cordis，普通 Node 即可）
+npm run test:e2e   # 真实 dsh web 端到端（需要本机桌面版）
 ```
+
+Host 冒烟测试通过 `@deepseek-ai/cordis` 这个 devDependency 装配真实插件上下文，自己创建并清理临时 `DSH_HOME`，不需要桌面版；设置 `DSH_SMOKE_KEEP=1` 可以保留临时目录用于排查。CI（GitHub Actions）会跑单元测试、冒烟测试和打包内容检查；e2e 依赖本机的 DeepSeek Harness 桌面版，需要手动执行。
 
 `npm run test:e2e` 会启动真实 `dsh web` Host，在临时 `DSH_HOME` 中跑完整流程。默认使用 `/Applications/DeepSeek Harness.app`，也可以用 `DSH_ELECTRON` 指向其他 Electron 可执行文件。设置 `DSH_E2E_KEEP=1` 可以保留临时目录和日志。
-
-Host 冒烟测试需要单独的临时 `DSH_HOME`：
-
-```bash
-DSH_HOME=$(mktemp -d) ELECTRON_RUN_AS_NODE=1 \
-  "/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness" \
-  test/smoke-host.mjs
-```
 
 项目结构：
 
