@@ -1,5 +1,7 @@
 # dsh-session-trash
 
+[![CI](https://github.com/wangxiaocuo/dsh-session-trash/actions/workflows/ci.yml/badge.svg)](https://github.com/wangxiaocuo/dsh-session-trash/actions/workflows/ci.yml)
+
 简体中文 | [English](./README.en.md)
 
 [GitHub](https://github.com/wangxiaocuo/dsh-session-trash) · [npm](https://www.npmjs.com/package/@wangxiaocuo/dsh-session-trash) · [更新记录](./CHANGELOG.md)
@@ -176,6 +178,7 @@ npm 安装的插件在「插件」页打开「会话回收站」的详情，展�
 pnpm install
 pnpm test          # 单元测试 + 真实 DOM 组件测试（jsdom）
 pnpm typecheck     # tsc --checkJs（当前覆盖 lib/ 和 index.js）
+pnpm test:coverage # 覆盖率（CI 的门槛只作用于 lib/**）
 pnpm test:smoke    # Host 冒烟测试（真实 Cordis，普通 Node 即可）
 npm run test:e2e   # 真实 dsh web 端到端（桌面版或 npm 安装的 DSH）
 ```
@@ -188,10 +191,19 @@ Host 冒烟测试通过 `@deepseek-ai/cordis` 这个 devDependency 装配真实�
 |---|---|
 | 单元测试、Host 冒烟测试 | CI：Ubuntu Node 20/22、Windows Node 22 |
 | 打包内容（`npm pack`） | CI：Ubuntu |
+| 覆盖率门槛（`lib/**`，行 85 / 分支 70 / 函数 84） | CI：Ubuntu Node 22 |
 | 真实 `dsh web` 端到端（npm 安装的 DSH） | CI：Ubuntu、Windows（Node 22） |
 | 真实 `dsh web` 端到端（桌面版） | macOS + DSH 0.2.2-rc.1（手动执行） |
 
 `npm run test:e2e` 会启动真实 `dsh web` Host，在临时 `DSH_HOME` 中跑完整流程。默认按平台在常见安装位置查找桌面版（也可以用 `DSH_ELECTRON` 指定）；设置 `DSH_E2E_DSH_BIN` 指向 npm 安装的 `@deepseek-ai/dsh` 的 `lib/bin.js` 时，改用普通 Node 启动 Host——CI 和 Linux/Windows 都走这条路径，不依赖桌面版。找不到 Host 时打印跳过信息并以 0 退出。依赖 POSIX 权限位的「清理失败」场景在 Windows 上会跳过。设置 `DSH_E2E_KEEP=1` 可以保留临时目录和日志。
+
+### 发布（维护者）
+
+1. 更新 `package.json` 版本和 `CHANGELOG.md`，提交并推送。
+2. 打 tag 并推送：`git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`。
+3. tag 会触发 [release.yml](.github/workflows/release.yml)：跑 typecheck、单测、smoke 和真实 Host e2e，然后 `npm publish --provenance` 并创建 GitHub Release。
+
+发布使用 npm Trusted Publishing（OIDC），不需要 `NPM_TOKEN`：在 npmjs.com 的包设置 → Publishing access → Trusted publishers 里添加仓库 `wangxiaocuo/dsh-session-trash` 和 workflow `release.yml`。如果改用 automation token，取消 release.yml 里 `NODE_AUTH_TOKEN` 的注释并添加同名 secret。
 
 项目结构：
 

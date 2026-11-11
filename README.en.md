@@ -1,5 +1,7 @@
 # dsh-session-trash
 
+[![CI](https://github.com/wangxiaocuo/dsh-session-trash/actions/workflows/ci.yml/badge.svg)](https://github.com/wangxiaocuo/dsh-session-trash/actions/workflows/ci.yml)
+
 [简体中文](./README.md) | English
 
 [GitHub](https://github.com/wangxiaocuo/dsh-session-trash) · [npm](https://www.npmjs.com/package/@wangxiaocuo/dsh-session-trash) · [Changelog](./CHANGELOG.md)
@@ -177,6 +179,7 @@ The index schema is v2; a v1 index is upgraded automatically on startup and pres
 pnpm install
 pnpm test          # unit tests + real-DOM component tests (jsdom)
 pnpm typecheck     # tsc --checkJs (currently lib/ and index.js)
+pnpm test:coverage # coverage (CI thresholds apply to lib/**)
 pnpm test:smoke    # Host smoke test (real Cordis, plain Node)
 npm run test:e2e   # real dsh web end-to-end (desktop app or npm-installed DSH)
 ```
@@ -189,10 +192,19 @@ What CI verifies:
 |---|---|
 | Unit tests, Host smoke test | CI: Ubuntu Node 20/22, Windows Node 22 |
 | Package contents (`npm pack`) | CI: Ubuntu |
+| Coverage thresholds (`lib/**`, lines 85 / branches 70 / functions 84) | CI: Ubuntu Node 22 |
 | Real `dsh web` end to end (npm-installed DSH) | CI: Ubuntu, Windows (Node 22) |
 | Real `dsh web` end to end (desktop app) | macOS + DSH 0.2.2-rc.1 (run manually) |
 
 `npm run test:e2e` boots a real `dsh web` Host in a temporary `DSH_HOME` and runs the full flow. By default it discovers the desktop app in the platform's usual install locations (or uses `DSH_ELECTRON`); set `DSH_E2E_DSH_BIN` to the `lib/bin.js` of an npm-installed `@deepseek-ai/dsh` to boot the Host with plain Node instead - CI and Linux/Windows use that mode, with no desktop app required. When no Host is found it prints a skip message and exits 0. The cleanup-failure scenario that relies on POSIX permission bits is skipped on Windows. Set `DSH_E2E_KEEP=1` to keep the temporary home and logs.
+
+### Releasing (maintainers)
+
+1. Bump the version in `package.json` and update `CHANGELOG.md`, then commit and push.
+2. Create and push a tag: `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`.
+3. The tag runs [release.yml](.github/workflows/release.yml): typecheck, unit tests, smoke test, real-host e2e, then `npm publish --provenance` and a GitHub release.
+
+Publishing uses npm Trusted Publishing (OIDC), so no `NPM_TOKEN` is required: add repository `wangxiaocuo/dsh-session-trash` and workflow `release.yml` under the package's Settings -> Publishing access -> Trusted publishers on npmjs.com. To use an automation token instead, uncomment the `NODE_AUTH_TOKEN` environment variable in release.yml and add the matching secret.
 
 Project layout:
 

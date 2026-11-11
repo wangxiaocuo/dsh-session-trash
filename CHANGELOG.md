@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- CI 增加 `lib/**` 覆盖率门槛（行 85 / 分支 70 / 函数 84）和 README 的 CI badge。
+- 新增 tag 触发的 release workflow：typecheck、单测、smoke、真实 Host e2e 通过后 `npm publish --provenance` 并创建 GitHub Release；使用 npm Trusted Publishing，无需 `NPM_TOKEN`。
+
+### Changed
+
+- 收紧 `lib/errors.js` 和 `lib/fsops.js` 的类型（`any` 换成 `unknown` 与具体形状）。
+
 ## [0.6.4] - 2026-11-11
 
 ### Added
