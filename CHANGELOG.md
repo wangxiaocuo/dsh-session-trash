@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-11-11
+
 ### Added
 
 - e2e 支持 `DSH_E2E_DSH_BIN` 启动 npm 安装的 `@deepseek-ai/dsh` web Host，不再依赖桌面版；Linux/Windows 也能跑真实 Host 端到端测试。
@@ -92,6 +94,7 @@
 
 - 回收站工具栏的「永久删除全部」与二次确认；`missing` 记录只移出索引，不删除会话文件。
 
+[0.6.4]: https://github.com/wangxiaocuo/dsh-session-trash/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/wangxiaocuo/dsh-session-trash/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/wangxiaocuo/dsh-session-trash/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/wangxiaocuo/dsh-session-trash/compare/v0.6.0...v0.6.1
