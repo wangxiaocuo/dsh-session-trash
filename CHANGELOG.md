@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.6.8] - 2026-11-11
+
 ### Changed
 
 - 重新设计插件 logo（`icon.svg`）：改成「宽口回收桶 + 桶内一颗对话气泡」的原创图标，薄荷绿 / 墨蓝 / 珊瑚橙配色，替掉原先直接复用的 `trash-outline` 图形；在插件列表 36px 的显示尺寸下桶身、桶盖和气泡都能分辨。界面内的菜单、设置页章节图标和空状态图标不变。
@@ -139,6 +141,7 @@
 
 - 回收站工具栏的「永久删除全部」与二次确认；`missing` 记录只移出索引，不删除会话文件。
 
+[0.6.8]: https://github.com/wangxiaocuo/dsh-session-trash/compare/v0.6.7...v0.6.8
 [0.6.7]: https://github.com/wangxiaocuo/dsh-session-trash/compare/v0.6.6...v0.6.7
 [0.6.6]: https://github.com/wangxiaocuo/dsh-session-trash/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/wangxiaocuo/dsh-session-trash/compare/v0.6.4...v0.6.5
