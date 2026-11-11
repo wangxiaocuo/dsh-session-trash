@@ -1,10 +1,41 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="Session trash">
-  <rect width="64" height="64" rx="14" fill="#2A6FF0"/>
-  <g transform="translate(14 14) scale(2.25)" fill="none" stroke="#FFFFFF" stroke-width="1">
-    <path d="M1.28149 3.88831H14.7187"/>
-    <path d="M5.41602 3.88833V2.47962C5.41602 2.29282 5.52492 2.11366 5.71876 1.98157C5.9126 1.84948 6.17551 1.77527 6.44964 1.77527H9.55053C9.82466 1.77527 10.0876 1.84948 10.2814 1.98157C10.4753 2.11366 10.5842 2.29282 10.5842 2.47962V3.88833"/>
-    <path d="M2.57349 3.88831L3.19366 13.2943C3.21937 13.5502 3.33952 13.7872 3.53065 13.9593C3.72178 14.1313 3.97016 14.2259 4.22729 14.2246H11.7728C12.0299 14.2259 12.2783 14.1313 12.4694 13.9593C12.6605 13.7872 12.7807 13.5502 12.8064 13.2943L13.4266 3.88831"/>
-    <path d="M6.44946 6.98926V11.1238"/>
-    <path d="M9.55054 6.98926V11.1238"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="Session Trash">
+  <title>Session Trash</title>
+  <!-- A wide-lidded bin with one conversation bubble inside it.
+       Mint stock, ink bin, coral lid: built to read at the 36 px plugin-list tile. -->
+  <defs>
+    <linearGradient id="st-tile" x1="8" y1="0" x2="120" y2="128" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8CF8D8"/>
+      <stop offset="1" stop-color="#0FA587"/>
+    </linearGradient>
+    <radialGradient id="st-glow" cx="34" cy="20" r="82" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="st-bin" x1="30" y1="56" x2="98" y2="104" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0D2540"/>
+      <stop offset="0.6" stop-color="#081427"/>
+      <stop offset="1" stop-color="#040A14"/>
+    </linearGradient>
+    <linearGradient id="st-lid" x1="28" y1="33" x2="100" y2="50" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF9566"/>
+      <stop offset="1" stop-color="#D64529"/>
+    </linearGradient>
+    <linearGradient id="st-bubble" x1="52" y1="70" x2="80" y2="98" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#CBF7E9"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="url(#st-tile)"/>
+  <rect width="128" height="128" rx="28" fill="url(#st-glow)"/>
+  <ellipse cx="64" cy="108" rx="31" ry="4.2" fill="#04302A" opacity="0.26"/>
+  <rect x="53" y="30.5" width="22" height="10" rx="5" fill="url(#st-lid)"/>
+  <rect x="28" y="38" width="72" height="13" rx="6.5" fill="url(#st-lid)"/>
+  <rect x="30.5" y="39.8" width="67" height="2.6" rx="1.3" fill="#FFFFFF" opacity="0.32"/>
+  <path d="M36 58 H92 L88.5 92 Q88 104 76 104 H52 Q40 104 39.5 92 Z" fill="url(#st-bin)"/>
+  <path d="M36 58 H92 L88.5 92 Q88 104 76 104 H52 Q40 104 39.5 92 Z" fill="none" stroke="url(#st-bin)" stroke-width="11" stroke-linejoin="round"/>
+  <g transform="rotate(-8 64 82)">
+    <rect x="52.5" y="70" width="26" height="19" rx="9.5" fill="url(#st-bubble)"/>
+    <path d="M57 86 L54.4 95.4 Q53.9 97.2 55.8 96.1 L65 89.6 Z" fill="url(#st-bubble)"/>
+    <path d="M56.5 75.4 Q65 71.8 73.5 75.4" fill="none" stroke="#FFFFFF" stroke-opacity="0.55" stroke-width="2" stroke-linecap="round"/>
   </g>
 </svg>

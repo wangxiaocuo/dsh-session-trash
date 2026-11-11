@@ -224,4 +224,4 @@ locale/               plugin display names and descriptions
 test/                 unit tests, Host smoke test, real dsh web e2e
 ```
 
-The trash icon uses the `trash-outline` artwork from the DeepSeek Harness product icon set, MIT licensed, © 2026 DeepSeek. The project itself is MIT licensed; see [LICENSE](./LICENSE).
+The plugin logo (`icon.svg`) is an original design for this project: a wide lidded bin holding a single conversation bubble, drawn in mint, ink and coral to read at the 36 px tile size used by the plugin list. The in-app context menu, settings-section icon, and empty state still use the `trash-outline` artwork from the DeepSeek Harness product icon set, MIT licensed, © 2026 DeepSeek, so they match DSH's own "Delete workspace" glyph. The project itself is MIT licensed; see [LICENSE](./LICENSE).
