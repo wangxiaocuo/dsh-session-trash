@@ -174,7 +174,8 @@ npm 安装的插件在「插件」页打开「会话回收站」的详情，展�
 
 ```bash
 pnpm install
-pnpm test          # 单元测试
+pnpm test          # 单元测试 + 真实 DOM 组件测试（jsdom）
+pnpm typecheck     # tsc --checkJs（当前覆盖 lib/ 和 index.js）
 pnpm test:smoke    # Host 冒烟测试（真实 Cordis，普通 Node 即可）
 npm run test:e2e   # 真实 dsh web 端到端（桌面版或 npm 安装的 DSH）
 ```

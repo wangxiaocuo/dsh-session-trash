@@ -175,7 +175,8 @@ The index schema is v2; a v1 index is upgraded automatically on startup and pres
 
 ```bash
 pnpm install
-pnpm test          # unit tests
+pnpm test          # unit tests + real-DOM component tests (jsdom)
+pnpm typecheck     # tsc --checkJs (currently lib/ and index.js)
 pnpm test:smoke    # Host smoke test (real Cordis, plain Node)
 npm run test:e2e   # real dsh web end-to-end (desktop app or npm-installed DSH)
 ```

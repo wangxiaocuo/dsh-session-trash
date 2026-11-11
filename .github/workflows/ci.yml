@@ -45,6 +45,7 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
       - name: unit tests
         shell: bash
         run: pnpm test 2>&1 | tee "$RUNNER_TEMP/unit.log"

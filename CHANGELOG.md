@@ -8,6 +8,13 @@
 
 - e2e 支持 `DSH_E2E_DSH_BIN` 启动 npm 安装的 `@deepseek-ai/dsh` web Host，不再依赖桌面版；Linux/Windows 也能跑真实 Host 端到端测试。
 - CI 新增真实 Host e2e job（Ubuntu + Windows），失败时输出 check annotations。
+- 新增 `pnpm typecheck`（`tsc --checkJs`，先覆盖 `lib/` 和 `index.js`）并接入 CI；DSH 服务通过 `types/dsh-context.d.ts` 的 ambient 声明提供类型。
+- 新增 jsdom + 真实 React 渲染测试（`test/client-dom.test.js`），覆盖行菜单的方向键/Escape/Tab/外点关闭，以及确认对话框的焦点陷阱和焦点恢复。
+
+### Fixed
+
+- ActionMenu：Escape 不再冒泡到宿主设置弹层；Tab 会关闭菜单并让焦点自然移动；分隔符使用 `role="separator"`。
+- ConfirmDialog：打开它的行或按钮被移除后，焦点回退到列表面板，不再丢到 `body`。
 
 ## [0.6.3] - 2026-11-11
 
