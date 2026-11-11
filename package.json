@@ -1,7 +1,7 @@
 {
   "name": "@wangxiaocuo/dsh-session-trash",
   "version": "0.6.7",
-  "description": "DeepSeek Harness plugin: move cold sessions into a recoverable trash, restore them within the retention window, or delete their logs permanently.",
+  "description": "Session trash for DeepSeek Harness: move cold sessions out of the sidebar into a recoverable trash, restore them within the retention window, or delete the logs permanently.",
   "license": "MIT",
   "author": "wangxiaocuo",
   "homepage": "https://github.com/wangxiaocuo/dsh-session-trash#readme",
