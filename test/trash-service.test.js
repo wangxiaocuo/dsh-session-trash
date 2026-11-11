@@ -1065,3 +1065,138 @@ for (const row of treeMatrix) {
     await harness.dispose()
   })
 }
+
+test('trash captures the folded title snapshot returned by the modern query service', async () => {
+  const harness = await createHarness({ titleApi: 'snapshot' })
+  const project = path.join(harness.root, 'project')
+  await fs.mkdir(project)
+  await harness.addSession({ id: 'session-a', cwd: project, title: 'Refactor login' })
+
+  const entry = await harness.service.trash('session-a')
+  assert.equal(entry.title, 'Refactor login')
+  const state = await harness.stateService.snapshot()
+  assert.equal(state.entries[0].title, 'Refactor login')
+  await harness.dispose()
+})
+
+test('trash still accepts a plain string title from older query services', async () => {
+  const harness = await createHarness({ titleApi: 'string' })
+  const project = path.join(harness.root, 'project')
+  await fs.mkdir(project)
+  await harness.addSession({ id: 'session-a', cwd: project, title: 'Fix navbar' })
+
+  const entry = await harness.service.trash('session-a')
+  assert.equal(entry.title, 'Fix navbar')
+  await harness.dispose()
+})
+
+test('trash falls back to the documented snapshot batch face when readTitle is absent', async () => {
+  const harness = await createHarness({ titleApi: 'snapshots' })
+  const project = path.join(harness.root, 'project')
+  await fs.mkdir(project)
+  await harness.addSession({ id: 'session-a', cwd: project, title: 'Batch title' })
+
+  const entry = await harness.service.trash('session-a')
+  assert.equal(entry.title, 'Batch title')
+  await harness.dispose()
+})
+
+test('trash falls back to the cached title projection when the log fold fails', async () => {
+  const harness = await createHarness({
+    titleApi: 'throwing',
+    cachedTitles: new Map([['session-a', 'Cached conversation title']]),
+  })
+  const project = path.join(harness.root, 'project')
+  await fs.mkdir(project)
+  await harness.addSession({ id: 'session-a', cwd: project, title: 'Unreadable log title' })
+
+  const entry = await harness.service.trash('session-a')
+  assert.equal(entry.title, 'Cached conversation title')
+  await harness.dispose()
+})
+
+test('state entries expose the original workspace title and every member title', async () => {
+  const harness = await createHarness()
+  const project = path.join(harness.root, 'project')
+  await fs.mkdir(project)
+  await harness.addSession({ id: 'session-parent', cwd: project, title: 'Parent title' })
+  await harness.addSession({
+    id: 'child-a',
+    cwd: project,
+    title: 'Child title',
+    origin: 'subagent',
+    parentSession: 'session-parent',
+  })
+  harness.workspaces.add({ id: 'ws-1', path: project, title: 'Scratch workspace', sessionIds: ['session-parent'] })
+  await harness.service.trash('session-parent')
+
+  const state = await harness.stateService.snapshot()
+  assert.equal(state.entries[0].originalWorkspaceTitle, 'Scratch workspace')
+  assert.deepEqual(
+    state.entries[0].members.map((member) => member.title),
+    ['Parent title', 'Child title'],
+  )
+  await harness.dispose()
+})
+
+test('startup title repair recovers fallback titles from the projection cache', async () => {
+  const harness = await createHarness({ titleApi: 'none' })
+  const project = path.join(harness.root, 'project')
+  await fs.mkdir(project)
+  await harness.addSession({ id: 'session-parent', cwd: project, title: 'Parent title' })
+  await harness.addSession({
+    id: 'child-a',
+    cwd: project,
+    title: 'Child title',
+    origin: 'subagent',
+    parentSession: 'session-parent',
+  })
+  const entry = await harness.service.trash('session-parent')
+  // With no title service the old release shape is reproduced: the cwd basename.
+  assert.equal(entry.title, 'project')
+  assert.deepEqual(
+    entry.members.map((member) => member.title),
+    ['project', 'project'],
+  )
+  await harness.writeCachedTitle('session-parent', 'Fix the parser', { cwd: project })
+  await harness.writeCachedTitle('child-a', 'Audit the parser', { cwd: project })
+
+  assert.deepEqual(await harness.service.repairTitles(), { repaired: 1 })
+  const repaired = harness.store.findEntry('session-parent')
+  assert.equal(repaired?.title, 'Fix the parser')
+  assert.deepEqual(
+    repaired?.members.map((member) => member.title),
+    ['Fix the parser', 'Audit the parser'],
+  )
+  const state = await harness.stateService.snapshot()
+  assert.equal(state.entries[0].title, 'Fix the parser')
+  const meta = JSON.parse(await fs.readFile(harness.store.metaPath(entry.trashId), 'utf8'))
+  assert.equal(meta.title, 'Fix the parser')
+  // The repair is idempotent.
+  assert.deepEqual(await harness.service.repairTitles(), { repaired: 0 })
+  await harness.dispose()
+})
+
+test('title repair keeps real titles and ignores unrelated or missing cache records', async () => {
+  const titled = await createHarness()
+  const project = path.join(titled.root, 'project')
+  await fs.mkdir(project)
+  await titled.addSession({ id: 'session-real', cwd: project, title: 'Real title' })
+  await titled.service.trash('session-real')
+  await titled.writeCachedTitle('session-real', 'Stale cached title', { cwd: project })
+  assert.deepEqual(await titled.service.repairTitles(), { repaired: 0 })
+  assert.equal(titled.store.findEntry('session-real')?.title, 'Real title')
+  await titled.dispose()
+
+  const unrelated = await createHarness({ titleApi: 'none' })
+  const otherProject = path.join(unrelated.root, 'project')
+  await fs.mkdir(otherProject)
+  await unrelated.addSession({ id: 'session-old', cwd: otherProject, title: 'Unused' })
+  await unrelated.service.trash('session-old')
+  await unrelated.writeCachedTitle('session-old', 'Another workspace title', {
+    cwd: path.join(unrelated.root, 'other-project'),
+  })
+  assert.deepEqual(await unrelated.service.repairTitles(), { repaired: 0 })
+  assert.equal(unrelated.store.findEntry('session-old')?.title, 'project')
+  await unrelated.dispose()
+})

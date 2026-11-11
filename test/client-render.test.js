@@ -183,6 +183,17 @@ function textOf(tree) {
 }
 
 /**
+ * @param {unknown} node element tree node.
+ * @returns {string} the concatenated text of the subtree in document order.
+ */
+function textContent(node) {
+  if (Array.isArray(node)) return node.map(textContent).join('')
+  if (typeof node === 'string') return node
+  if (node === null || typeof node !== 'object' || node.type === undefined) return ''
+  return node.children.map(textContent).join('')
+}
+
+/**
  * @param {object} tree rendered tree.
  * @param {string} label exact button text.
  * @returns {object | undefined} the matching button element.
@@ -355,6 +366,7 @@ function makeEntry(overrides = {}) {
     trashedAt: now - 1000,
     expiresAt: now + 20 * DAY,
     originalCwd: '/tmp/x',
+    originalWorkspaceTitle: null,
     workspaceExistsAtDeletion: true,
     workspaceNowExists: true,
     sizeBytes: 1024,
@@ -367,7 +379,7 @@ function makeEntry(overrides = {}) {
     requiresOrphanRestore: false,
     lastError: null,
     subagentCount: 0,
-    members: [{ sessionId: 'session-x', origin: null, sizeBytes: 1024 }],
+    members: [{ sessionId: 'session-x', origin: null, title: null, sizeBytes: 1024 }],
     ...overrides,
   }
 }
@@ -405,6 +417,7 @@ function statePayload(overrides = {}) {
         trashedAt: now - 1000,
         expiresAt: now + 29 * DAY,
         originalCwd: '/tmp/demo',
+        originalWorkspaceTitle: null,
         workspaceExistsAtDeletion: true,
         workspaceNowExists: true,
         sizeBytes: 2048,
@@ -417,7 +430,7 @@ function statePayload(overrides = {}) {
         requiresOrphanRestore: false,
         lastError: null,
         subagentCount: 0,
-        members: [{ sessionId: 'session-alpha', origin: null, sizeBytes: 2048 }],
+        members: [{ sessionId: 'session-alpha', origin: null, title: null, sizeBytes: 2048 }],
         ...overrides,
       },
     ],
@@ -550,10 +563,12 @@ test('the trash page renders rows, badges, and row actions from /state', async (
   const text = textOf(tree)
   assert.ok(text.includes('Alpha'))
   assert.ok(text.includes('session-alpha'))
-  assert.ok(text.includes('/tmp/demo'))
   assert.ok(text.includes('恢复'))
   assert.ok(text.includes('回收站目录：$DSH_HOME/.session-trash'))
   assert.ok(text.includes('即将到期') || text.some((value) => value.includes('天后')))
+  const workspace = elementByClass(tree, 'dsh-trash__rowWorkspace')
+  assert.equal(textContent(workspace), '原工作区: demo')
+  assert.equal(workspace.props.title, '/tmp/demo')
 
   const menus = actionMenus(tree)
   assert.equal(menus.length, 1)
@@ -561,6 +576,73 @@ test('the trash page renders rows, badges, and row actions from /state', async (
   assert.deepEqual(labels, ['恢复为孤儿会话', '在文件管理器中显示', '复制 Session ID', '永久删除'])
   assert.equal(menus[0].props.items.at(-1).danger, true)
   assert.equal(menus[0].props.label, '「Alpha」的更多操作')
+})
+
+test('a row shows the recorded workspace title and keeps the full path as the tooltip', async () => {
+  const { factory, mini } = await loadModule()
+  const now = Date.now()
+  const payload = statePayloadWith([
+    makeEntry({
+      sessionId: 'session-alpha',
+      title: 'Alpha',
+      originalCwd: '/work/real/deep',
+      originalWorkspaceTitle: 'Real Workspace',
+      trashedAt: now - 1000,
+    }),
+    makeEntry({
+      sessionId: 'session-beta',
+      title: 'Beta',
+      originalCwd: '/work/legacy',
+      originalWorkspaceTitle: null,
+      trashedAt: now - 2000,
+    }),
+    makeEntry({
+      sessionId: 'session-gamma',
+      title: 'Gamma',
+      originalCwd: null,
+      originalWorkspaceTitle: null,
+      workspaceExistsAtDeletion: null,
+      workspaceNowExists: null,
+      trashedAt: now - 3000,
+    }),
+  ])
+  const client = createClient(factory, mini, payload)
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+  const workspaces = elementsByClass(tree, 'dsh-trash__rowWorkspace')
+  assert.deepEqual(workspaces.map(textContent), [
+    '原工作区: Real Workspace',
+    '原工作区: legacy',
+    '原工作区: 未分组',
+  ])
+  assert.equal(workspaces[0].props.title, '/work/real/deep')
+  assert.equal(workspaces[1].props.title, '/work/legacy')
+  assert.equal(workspaces[2].props.title, undefined)
+})
+
+test('an older payload without workspace or member titles still renders', async () => {
+  const { factory, mini } = await loadModule()
+  const entry = makeEntry({
+    sessionId: 'session-legacy',
+    title: 'Legacy',
+    originalCwd: '/work/legacy',
+    subagentCount: 1,
+  })
+  delete entry.originalWorkspaceTitle
+  entry.members = [
+    { sessionId: 'session-legacy', origin: null, sizeBytes: 10 },
+    { sessionId: 'session-legacy-child', origin: 'subagent', sizeBytes: 5 },
+  ]
+  const client = createClient(factory, mini, statePayloadWith([entry]))
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  let tree = await mini.settle(section.component)
+  assert.equal(textContent(elementByClass(tree, 'dsh-trash__rowWorkspace')), '原工作区: legacy')
+  assert.equal(textOf(tree).some((value) => value.includes('/work/legacy')), false)
+
+  buttonByText(tree, '展开子会话').props.onClick()
+  tree = await mini.settle(section.component)
+  assert.deepEqual(elementsByClass(tree, 'dsh-trash__memberTitle'), [])
+  assert.ok(textOf(tree).some((value) => value.includes('session-legacy-child')))
 })
 
 test('a row shows a sub-session count badge only when the entry has hidden sub-sessions', async () => {
@@ -869,6 +951,46 @@ test('search narrows the list by title, Session ID, or workspace', async () => {
   tree = await mini.settle(section.component)
   assert.deepEqual(rowTitles(tree), ['Refactor login', 'Fix navbar', 'Docs'])
   assert.equal(inputByLabel(tree, '搜索回收站').props.value, '')
+})
+
+test('search matches the recorded workspace title and member conversation titles', async () => {
+  const { factory, mini } = await loadModule()
+  const now = Date.now()
+  const payload = statePayloadWith([
+    makeEntry({
+      sessionId: 'session-alpha',
+      title: 'Alpha',
+      originalCwd: '/work/alpha',
+      originalWorkspaceTitle: 'Design System',
+      trashedAt: now - 1000,
+    }),
+    makeEntry({
+      sessionId: 'session-beta',
+      title: 'Beta',
+      originalCwd: '/work/beta',
+      subagentCount: 1,
+      members: [
+        { sessionId: 'session-beta', origin: null, title: 'Beta', sizeBytes: 10 },
+        { sessionId: 'session-beta-child', origin: 'subagent', title: 'Fix flaky test', sizeBytes: 5 },
+      ],
+      trashedAt: now - 2000,
+    }),
+  ])
+  const client = createClient(factory, mini, payload)
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  let tree = await mini.settle(section.component)
+
+  inputByLabel(tree, '搜索回收站').props.onChange({ target: { value: 'design system' } })
+  tree = await mini.settle(section.component)
+  assert.deepEqual(rowTitles(tree), ['Alpha'])
+
+  inputByLabel(tree, '搜索回收站').props.onChange({ target: { value: 'FLAKY' } })
+  tree = await mini.settle(section.component)
+  assert.deepEqual(rowTitles(tree), ['Beta'])
+
+  inputByLabel(tree, '搜索回收站').props.onChange({ target: { value: 'work/beta' } })
+  tree = await mini.settle(section.component)
+  assert.deepEqual(rowTitles(tree), ['Beta'])
 })
 
 test('workspace and expiry filters narrow the list', async () => {
@@ -1500,16 +1622,19 @@ test('rows whose workspace is gone are not part of a batch selection', async () 
   assert.equal(selectAll.props.disabled, true)
 })
 
-test('a sub-session row expands into its member list', async () => {
+test('a sub-session row expands into its member list with conversation titles', async () => {
   const { factory, mini } = await loadModule()
   const payload = statePayloadWith([
     makeEntry({
       sessionId: 'session-parent',
       title: 'Parent',
-      subagentCount: 1,
+      subagentCount: 2,
       members: [
-        { sessionId: 'session-parent', origin: null, sizeBytes: 1024 },
-        { sessionId: 'session-parent-child', origin: 'subagent', sizeBytes: 512 },
+        { sessionId: 'session-parent', origin: null, title: 'Parent conversation', sizeBytes: 1024 },
+        { sessionId: 'session-parent-child', origin: 'subagent', title: 'Child task', sizeBytes: 512 },
+        // A blank title and a title equal to the Session ID are not worth showing.
+        { sessionId: 'session-parent-child-2', origin: 'subagent', title: '  ', sizeBytes: 256 },
+        { sessionId: 'session-parent-child-3', origin: 'subagent', title: 'session-parent-child-3', sizeBytes: 128 },
       ],
     }),
   ])
@@ -1522,6 +1647,16 @@ test('a sub-session row expands into its member list', async () => {
   buttonByText(tree, '展开子会话').props.onClick()
   tree = await mini.settle(section.component)
   assert.ok(textOf(tree).some((value) => value.includes('session-parent-child')))
+  const memberTitles = elementsByClass(tree, 'dsh-trash__memberTitle')
+  assert.deepEqual(
+    memberTitles.map((node) => node.children.join('')),
+    ['Parent conversation', 'Child task'],
+  )
+  assert.deepEqual(
+    memberTitles.map((node) => node.props.title),
+    ['Parent conversation', 'Child task'],
+  )
+  assert.equal(elementsByClass(tree, 'dsh-trash__memberSize').length, 4)
   assert.ok(buttonByText(tree, '收起子会话') !== undefined)
 })
 

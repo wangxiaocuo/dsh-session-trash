@@ -222,28 +222,82 @@ export function createFakeWorkspaceRegistry() {
 
 /**
  * Build a coherent Phase 2/3 harness: real trash store and directories, fake
- * persistence, workspace, and native-open services.
+ * persistence, workspace, title, projection-cache, and native-open services.
  *
- * @param {{ config?: object, titles?: Map<string, string>, canOpenPath?: boolean, revealError?: Error, sessionController?: boolean }} [options] overrides.
+ * `titleApi` selects the shape the fake `sessionQuery` exposes:
+ * `snapshot` (DSH 0.2.2 `readTitle` returns a TitleSnapshot object), `string`
+ * (older query services), `snapshots` (only the documented batch face),
+ * `throwing` (the log fold fails), or `none` (no title service).
+ *
+ * @param {{
+ *   config?: object,
+ *   titles?: Map<string, string>,
+ *   titleApi?: 'snapshot' | 'string' | 'snapshots' | 'throwing' | 'none',
+ *   cachedTitles?: Map<string, string>,
+ *   projectionCache?: boolean,
+ *   canOpenPath?: boolean,
+ *   revealError?: Error,
+ *   sessionController?: boolean,
+ * }} [options] overrides.
  * @returns {Promise<object>} the harness handle.
  */
 export async function createHarness(options = {}) {
   const root = await createTempDir()
   const sessionsRoot = path.join(root, 'sessions')
   const trashRoot = path.join(root, '.session-trash')
+  const storagesRoot = path.join(root, 'storages')
   await fs.mkdir(sessionsRoot, { recursive: true })
   const persistence = createFakePersistence(sessionsRoot)
   const workspaces = createFakeWorkspaceRegistry()
   const titles = options.titles ?? new Map()
+  const cachedTitles = options.cachedTitles ?? new Map()
   const logger = createLogger()
   const config = { retentionDays: 30, sweepIntervalHours: 6, enableAutoCleanup: true, ...(options.config ?? {}) }
   const emissions = []
   const liveSessions = new Map()
   const liveAgents = new Map()
   let activity = () => Promise.resolve([])
-  const sessionQuery = {
-    async readTitle(sessionId) {
-      return titles.get(sessionId)
+  const titleApi = options.titleApi ?? 'snapshot'
+  /** @type {Record<string, any>} */
+  const sessionQuery = {}
+  /**
+   * @param {string} sessionId session identity.
+   * @returns {object | undefined} the folded title snapshot DSH returns.
+   */
+  const titleSnapshot = (sessionId) => {
+    const title = titles.get(sessionId)
+    if (title === undefined) return undefined
+    return { title, messageSeqs: [], source: { kind: 'user' }, eventSeq: 0, updatedAt: Date.now() }
+  }
+  if (titleApi === 'snapshot') {
+    sessionQuery.readTitle = async (sessionId) => titleSnapshot(sessionId)
+  } else if (titleApi === 'string') {
+    sessionQuery.readTitle = async (sessionId) => titles.get(sessionId)
+  } else if (titleApi === 'throwing') {
+    sessionQuery.readTitle = async (sessionId) => {
+      throw new Error(`cannot fold the title for ${sessionId}`)
+    }
+  } else if (titleApi === 'snapshots') {
+    sessionQuery.readTitleSnapshots = async (sessionIds) =>
+      sessionIds.map((sessionId) => {
+        const snapshot = titleSnapshot(sessionId)
+        return {
+          sessionId,
+          status: 'fulfilled',
+          value: snapshot === undefined ? { session: {} } : { session: {}, title: snapshot },
+        }
+      })
+  }
+  const projectionCache = {
+    /**
+     * @param {any} header session header.
+     * @param {string[]} keys requested projection keys.
+     * @returns {object | undefined} the cached block.
+     */
+    cachedSnapshot(header, keys) {
+      if (!Array.isArray(keys) || !keys.includes('title')) return undefined
+      const title = cachedTitles.get(header?.id)
+      return typeof title === 'string' && title !== '' ? { asOfSeq: 0, values: { title } } : undefined
     },
   }
   const revealed = []
@@ -262,6 +316,7 @@ export async function createHarness(options = {}) {
     ['sessionQuery', sessionQuery],
     ['workspaceRegistry', workspaces],
     ...(options.sessionController === false ? [] : [['sessionController', sessionController]]),
+    ...(options.projectionCache === false ? [] : [['sessionProjectionCache', projectionCache]]),
   ])
   const ctx = {
     sessionPersistence: persistence,
@@ -290,11 +345,12 @@ export async function createHarness(options = {}) {
     eligibility,
     config,
     logger,
-    paths: { root: trashRoot, display: '$DSH_HOME/.session-trash' },
+    paths: { home: root, root: trashRoot, display: '$DSH_HOME/.session-trash' },
   })
   return {
     root,
     sessionsRoot,
+    storagesRoot,
     trashRoot,
     persistence,
     workspaces,
@@ -322,6 +378,34 @@ export async function createHarness(options = {}) {
       const record = await persistence.add(input)
       if (input.title !== undefined) titles.set(input.id, input.title)
       return record
+    },
+    /**
+     * Write one durable session-projection-cache record, the DSH layout the
+     * startup title repair reads.
+     *
+     * @param {string} sessionId session identity.
+     * @param {string} title cached conversation title.
+     * @param {{ cwd?: string, createdAt?: number, formatVersion?: number, rowVersion?: number }} [identity] lifecycle fields.
+     * @returns {Promise<string>} the written cache file.
+     */
+    async writeCachedTitle(sessionId, title, identity = {}) {
+      const directory = path.join(storagesRoot, 'session_projcache', 'sessions')
+      await fs.mkdir(directory, { recursive: true })
+      const file = path.join(directory, `${sessionId}.json`)
+      const document = {
+        version: 7,
+        record: {
+          identity: {
+            formatVersion: identity.formatVersion ?? 4,
+            createdAt: identity.createdAt ?? Date.now(),
+            ...(identity.cwd === undefined ? {} : { cwd: identity.cwd }),
+            isSeeded: false,
+          },
+          rows: { title: { ver: identity.rowVersion ?? 1, seq: 0, val: title } },
+        },
+      }
+      await fs.writeFile(file, `${JSON.stringify(document, null, 2)}\n`)
+      return file
     },
     /**
      * @returns {Promise<void>} cleanup.

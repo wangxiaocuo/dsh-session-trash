@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- 回收站列表重新显示真实会话标题：DSH 0.2.2 的 `sessionQuery.readTitle()` 返回标题快照对象，插件此前只接受字符串，导致每条记录都退化成原工作区目录名（例如同一个工作区下的会话全显示为「Scratch」）。现在同时兼容标题快照、旧版字符串，以及 `readTitleSnapshots` 批量接口；日志无法折叠时再回退到 DSH 的会话投影缓存。
+- 启动时自动修复已按旧逻辑写入的条目：标题仍是工作区名或 Session ID 的记录（含子会话成员）会从 `<DSH_HOME>/storages/session_projcache` 的会话投影缓存补回真实标题，并同步重写索引与 `meta.json`。
+
+### Changed
+
+- 回收站行信息更清楚：Session ID 后显示「原工作区: <名称>」，完整路径作为 hover tooltip；展开子会话时显示每个成员的会话标题。
+
 ## [0.6.6] - 2026-11-11
 
 ### Added

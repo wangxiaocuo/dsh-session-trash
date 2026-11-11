@@ -205,15 +205,22 @@ async function writeProfile(home) {
 
 /**
  * Materialize one session directory with the compressed JSONL layout the
- * default backend expects.
+ * default backend expects: the header line in the first zstd frame, then one
+ * concatenated frame per event, matching the real v4 writer.
+ *
+ * Passing `title` appends a real `session/title` event so the suite exercises
+ * the backend's title fold (the production shape the trash service must read)
+ * instead of only a bare header. This is the regression gap that let a
+ * `readTitle()` snapshot object be silently treated as an untitled session.
  *
  * @param {string} home throwaway DSH home.
  * @param {string} sessionId session identity.
  * @param {string} cwd canonical project directory.
- * @param {{ origin?: string, parentSession?: string }} [extra] optional header fields.
+ * @param {{ origin?: string, parentSession?: string, title?: string }} [extra] optional header fields; `title` becomes a log event, not a header field.
  * @returns {Promise<string>} the session-owned directory.
  */
 async function writeSession(home, sessionId, cwd, extra = {}) {
+  const { title, ...headerExtra } = extra
   const directory = path.join(home, 'sessions', projectName(cwd), sessionId)
   await fs.mkdir(directory, { recursive: true })
   const header = {
@@ -224,12 +231,19 @@ async function writeSession(home, sessionId, cwd, extra = {}) {
     cwd,
     isSeeded: false,
     delegationDepth: 0,
-    ...extra,
+    ...headerExtra,
   }
-  await fs.writeFile(
-    path.join(directory, 'session.v4.jsonl.zstd'),
-    zstdCompressSync(Buffer.from(`${JSON.stringify(header)}\n`)),
-  )
+  const frames = [zstdCompressSync(Buffer.from(`${JSON.stringify(header)}\n`))]
+  if (typeof title === 'string' && title !== '') {
+    const event = {
+      type: 'session/title',
+      seq: 0,
+      time: Date.now() - 30_000,
+      data: { title, messageSeqs: [], source: { kind: 'user' } },
+    }
+    frames.push(zstdCompressSync(Buffer.from(`${JSON.stringify(event)}\n`)))
+  }
+  await fs.writeFile(path.join(directory, 'session.v4.jsonl.zstd'), Buffer.concat(frames))
   return directory
 }
 
@@ -531,6 +545,12 @@ const rebuildId = 'session-e2e-rebuild'
 const cleanupId = 'session-e2e-cleanup'
 const purgeId = 'session-e2e-purge'
 const bulkIds = ['session-e2e-bulk-a', 'session-e2e-bulk-b', 'session-e2e-bulk-missing']
+// Real conversation titles live in `session/title` log events, never in the
+// header. They deliberately differ from the cwd basename and the session id so
+// a fallback regression cannot silently satisfy the assertions.
+const alphaTitle = 'Investigate the flaky login retry path'
+const cascadeParentTitle = 'Repair the cascaded workspace restore'
+const cascadeChildTitles = ['Audit the restore ordering', 'Verify the rolled-back trash entry']
 let server
 let failure = null
 
@@ -551,15 +571,19 @@ try {
     await fs.mkdir(directory, { recursive: true })
   }
   await writeProfile(home)
-  const alphaDir = await writeSession(home, alphaId, alphaProject)
+  const alphaDir = await writeSession(home, alphaId, alphaProject, { title: alphaTitle })
   const betaDir = await writeSession(home, betaId, betaProject)
   for (const id of orderIds) await writeSession(home, id, orderProject)
   await writeSession(home, subagentId, subagentProject, { origin: 'subagent' })
   await writeSession(home, parentId, parentProject)
   await writeSession(home, childId, parentProject, { parentSession: parentId })
-  await writeSession(home, cascadeParentId, cascadeProject)
-  for (const child of cascadeChildIds) {
-    await writeSession(home, child, cascadeProject, { origin: 'subagent', parentSession: cascadeParentId })
+  await writeSession(home, cascadeParentId, cascadeProject, { title: cascadeParentTitle })
+  for (const [index, child] of cascadeChildIds.entries()) {
+    await writeSession(home, child, cascadeProject, {
+      origin: 'subagent',
+      parentSession: cascadeParentId,
+      title: cascadeChildTitles[index],
+    })
   }
   await writeSession(home, forgetId, forgetProject)
   await writeSession(home, rebuildId, rebuildProject)
@@ -671,10 +695,23 @@ try {
   assert.equal(cascadeTrashed.body.entry.state, 'trashed')
   assert.equal(cascadeTrashed.body.entry.subagentCount, 2)
   assert.equal(cascadeTrashed.body.entry.members.length, 3)
+  assert.equal(
+    cascadeTrashed.body.entry.title,
+    cascadeParentTitle,
+    'the trashed entry stores the conversation title folded from session/title events',
+  )
+  assert.notEqual(
+    cascadeTrashed.body.entry.title,
+    path.basename(cascadeProject),
+    'the title must not fall back to the cwd basename',
+  )
+  assert.notEqual(cascadeTrashed.body.entry.title, cascadeParentId, 'the title must not fall back to the session id')
   for (const id of [cascadeParentId, ...cascadeChildIds]) {
     await assert.rejects(fs.stat(path.join(home, 'sessions', projectName(cascadeProject), id)))
   }
   const cascadeEntry = await findEntry(home, cascadeParentId)
+  assert.equal(cascadeEntry.title, cascadeParentTitle)
+  assert.equal(cascadeEntry.members[0].title, cascadeParentTitle)
   assert.equal((await fs.stat(path.join(home, '.session-trash', 'objects', cascadeEntry.trashId, 'session'))).isDirectory(), true)
   for (const child of cascadeChildIds) {
     assert.equal(
@@ -685,10 +722,20 @@ try {
   const cascadeState = await api.call('state')
   const cascadeRow = cascadeState.body.entries.find((entry) => entry.sessionId === cascadeParentId)
   assert.equal(cascadeRow.subagentCount, 2)
+  assert.equal(cascadeRow.title, cascadeParentTitle, 'the /state row title is the real conversation title')
   assert.deepEqual(
     cascadeRow.members.map((member) => member.sessionId),
     [cascadeParentId, ...cascadeChildIds],
   )
+  const cascadeMemberTitles = new Map(cascadeRow.members.map((member) => [member.sessionId, member.title]))
+  assert.equal(
+    cascadeMemberTitles.get(cascadeParentId),
+    cascadeParentTitle,
+    'the /state member list exposes the parent conversation title',
+  )
+  for (const [index, child] of cascadeChildIds.entries()) {
+    assert.equal(cascadeMemberTitles.get(child), cascadeChildTitles[index], `the member title for ${child}`)
+  }
   const cascadeRestored = await api.call('restore', { method: 'POST', body: { sessionId: cascadeParentId } })
   assert.equal(cascadeRestored.status, 200)
   for (const id of [cascadeParentId, ...cascadeChildIds]) {
@@ -696,18 +743,27 @@ try {
   }
   const cascadeAgain = await api.call('preflight', { method: 'POST', body: { sessionId: cascadeParentId } })
   assert.equal(cascadeAgain.body.eligible, true)
-  pass('cascade trash and restore move the whole hidden tree')
+  pass('cascade trash and restore move the whole hidden tree and keep per-member titles')
 
   // --- Trash + undo -------------------------------------------------------
   const trashed = await api.call('trash', { method: 'POST', body: { sessionId: alphaId } })
   assert.equal(trashed.status, 200)
   assert.equal(trashed.body.entry.state, 'trashed')
+  assert.equal(trashed.body.entry.title, alphaTitle, 'the trash response carries the folded conversation title')
+  assert.notEqual(trashed.body.entry.title, path.basename(alphaProject), 'the title must not be the cwd basename')
+  assert.notEqual(trashed.body.entry.title, alphaId, 'the title must not be the session id')
+  const alphaEntry = await findEntry(home, alphaId)
+  assert.equal(alphaEntry.title, alphaTitle, 'the durable index stores the conversation title')
+  const titledState = await api.call('state')
+  const titledRow = titledState.body.entries.find((entry) => entry.sessionId === alphaId)
+  assert.ok(titledRow !== undefined, 'the trashed session appears in /state')
+  assert.equal(titledRow.title, alphaTitle, 'the /state row exposes the conversation title')
   await assert.rejects(fs.stat(alphaDir))
   const undo = await api.call('restore', { method: 'POST', body: { sessionId: alphaId } })
   assert.equal(undo.status, 200)
   assert.equal(undo.body.session.workspaceReattached, true)
   assert.equal((await fs.stat(alphaDir)).isDirectory(), true)
-  pass('trash + undo/normal restore (Workspace reattached)')
+  pass('trash + undo/normal restore (Workspace reattached, real title captured)')
 
   // --- Workspace sibling order -------------------------------------------
   const orderTrashed = await api.call('trash', { method: 'POST', body: { sessionId: orderIds[1] } })

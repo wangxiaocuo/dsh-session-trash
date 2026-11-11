@@ -116,6 +116,16 @@ export function apply(ctx, config) {
           `startup trash recovery failed: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
         )
       }
+      try {
+        const titles = await trashService.repairTitles()
+        if (titles.repaired > 0) {
+          logger.info(`recovered ${titles.repaired} conversation titles from the projection cache`)
+        }
+      } catch (error) {
+        logger.warn(
+          `startup title repair failed: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
+        )
+      }
       cleanupService.start()
       return summary
     })

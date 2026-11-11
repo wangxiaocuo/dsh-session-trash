@@ -206,6 +206,7 @@ window.__ModuleLoader__.load({
       rebuildDoneUnindexed: '索引已重建，共 {count} 个条目；{unindexed} 个未索引对象已保留',
       listLabel: '已删除的会话',
       noWorkspace: '未分组',
+      workspaceLabel: '原工作区:',
       unknownWorkspace: '未知工作区',
       trashedAtLabel: '移入时间',
       notScheduled: '不参与自动清理',
@@ -386,6 +387,7 @@ window.__ModuleLoader__.load({
       rebuildDoneUnindexed: 'Index rebuilt with {count} entries; {unindexed} unindexed objects were kept',
       listLabel: 'Deleted sessions',
       noWorkspace: 'Ungrouped',
+      workspaceLabel: 'Original workspace:',
       unknownWorkspace: 'Unknown workspace',
       trashedAtLabel: 'Trashed',
       notScheduled: 'Not scheduled for cleanup',
@@ -537,6 +539,22 @@ window.__ModuleLoader__.load({
         return leftAt - rightAt
       }
       return (right.trashedAt ?? 0) - (left.trashedAt ?? 0)
+    }
+
+    /**
+     * Read the readable workspace name of a trashed entry. Older Host payloads
+     * omit `originalWorkspaceTitle`, so the basename of `originalCwd` is the
+     * fallback.
+     *
+     * @param {object} entry wire entry.
+     * @returns {string} the workspace name, or an empty string when unknown.
+     */
+    function workspaceName(entry) {
+      const title = typeof entry.originalWorkspaceTitle === 'string' ? entry.originalWorkspaceTitle.trim() : ''
+      if (title !== '') return title
+      const cwd = typeof entry.originalCwd === 'string' ? entry.originalCwd.replace(/[\\/]+$/, '') : ''
+      const separator = Math.max(cwd.lastIndexOf('/'), cwd.lastIndexOf('\\'))
+      return cwd.slice(separator + 1)
     }
 
     /**
@@ -935,6 +953,7 @@ window.__ModuleLoader__.load({
       .dsh-trash__rowId { font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 11.5px; color: var(--dsw-alias-label-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
       .dsh-trash__rowMeta { display: flex; flex-wrap: wrap; gap: 2px 8px; font-size: 12px; line-height: 1.5; color: var(--dsw-alias-label-secondary); min-width: 0; }
       .dsh-trash__rowWorkspace { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; max-width: 100%; }
+      .dsh-trash__rowWorkspaceLabel { color: var(--dsw-alias-label-tertiary); }
       .dsh-trash__rowFacts { display: flex; flex-wrap: wrap; gap: 2px 8px; font-size: 12px; line-height: 1.5; color: var(--dsw-alias-label-tertiary); }
       .dsh-trash__rowError { font-size: 12px; line-height: 1.5; color: var(--dsw-alias-state-error-primary); overflow-wrap: anywhere; }
       .dsh-trash__rowActions { flex: none; display: flex; align-items: center; gap: 6px; padding-top: 2px; }
@@ -971,6 +990,7 @@ window.__ModuleLoader__.load({
       .dsh-trash__members { list-style: none; margin: 0; padding: 0 0 0 10px; display: flex; flex-direction: column; gap: 4px; border-left: 2px solid var(--dsw-alias-border-l1); }
       .dsh-trash__member { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12.5px; line-height: 1.5; color: var(--dsw-alias-label-secondary); }
       .dsh-trash__memberKind { color: var(--dsw-alias-label-tertiary); }
+      .dsh-trash__memberTitle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; max-width: 320px; }
       .dsh-trash__memberId { font-family: var(--dsw-font-mono, monospace); word-break: break-all; }
       .dsh-trash__memberSize { margin-left: auto; color: var(--dsw-alias-label-tertiary); }
 
@@ -1617,7 +1637,16 @@ window.__ModuleLoader__.load({
          */
         function matchesQuery(entry) {
           if (normalizedQuery === '') return true
-          const candidates = [entry.title, entry.sessionId, entry.originalCwd]
+          const memberTitles = (Array.isArray(entry.members) ? entry.members : []).map((member) =>
+            member !== null && typeof member === 'object' ? member.title : undefined,
+          )
+          const candidates = [
+            entry.title,
+            entry.sessionId,
+            entry.originalCwd,
+            entry.originalWorkspaceTitle,
+            ...memberTitles,
+          ]
           return candidates.some(
             (value) => typeof value === 'string' && value.toLowerCase().includes(normalizedQuery),
           )
@@ -2566,6 +2595,9 @@ window.__ModuleLoader__.load({
               const error = rowError ?? lastErrorText
               const errorTitle = rowError === undefined && typeof entry.lastError === 'string' ? entry.lastError : undefined
               const title = entry.title !== undefined && entry.title !== '' ? entry.title : entry.sessionId
+              const originalCwd =
+                typeof entry.originalCwd === 'string' && entry.originalCwd !== '' ? entry.originalCwd : null
+              const workspace = workspaceName(entry)
               return h(
                 'li',
                 { className: 'dsh-trash__row', key: entry.sessionId, 'aria-busy': rowBusy ? 'true' : 'false' },
@@ -2599,9 +2631,11 @@ window.__ModuleLoader__.load({
                       'span',
                       {
                         className: 'dsh-trash__rowWorkspace',
-                        title: entry.originalCwd ?? t('noWorkspace'),
+                        title: originalCwd ?? undefined,
                       },
-                      entry.originalCwd ?? t('noWorkspace'),
+                      h('span', { className: 'dsh-trash__rowWorkspaceLabel' }, t('workspaceLabel')),
+                      ' ',
+                      workspace === '' ? t('noWorkspace') : workspace,
                     ),
                   ),
                   h(
@@ -2631,8 +2665,12 @@ window.__ModuleLoader__.load({
                           ? h(
                               'ul',
                               { className: 'dsh-trash__members' },
-                              (Array.isArray(entry.members) ? entry.members : []).map((member) =>
-                                h(
+                              (Array.isArray(entry.members) ? entry.members : []).map((member) => {
+                                const memberTitle =
+                                  typeof member.title === 'string' && member.title.trim() !== ''
+                                    ? member.title.trim()
+                                    : ''
+                                return h(
                                   'li',
                                   { className: 'dsh-trash__member', key: member.sessionId },
                                   h(
@@ -2640,10 +2678,13 @@ window.__ModuleLoader__.load({
                                     { className: 'dsh-trash__memberKind' },
                                     member.origin === 'subagent' ? t('memberSubagent') : t('memberParent'),
                                   ),
+                                  memberTitle === '' || memberTitle === member.sessionId
+                                    ? null
+                                    : h('span', { className: 'dsh-trash__memberTitle', title: memberTitle }, memberTitle),
                                   h('code', { className: 'dsh-trash__memberId' }, member.sessionId),
                                   h('span', { className: 'dsh-trash__memberSize' }, formatBytes(member.sizeBytes)),
-                                ),
-                              ),
+                                )
+                              }),
                             )
                           : null,
                       )
