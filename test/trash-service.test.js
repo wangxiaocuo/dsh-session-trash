@@ -583,6 +583,105 @@ test('purge all isolates one failure and removes the rest on the next run', asyn
   await harness.dispose()
 })
 
+test('purge all commits the index a bounded number of times for a large trash', async () => {
+  const harness = await createHarness()
+  const project = path.join(harness.root, 'project')
+  await fs.mkdir(project)
+  for (let index = 0; index < 6; index += 1) {
+    const id = `session-${index}`
+    await harness.addSession({ id, cwd: project, title: id })
+    await harness.service.trash(id)
+  }
+
+  let commits = 0
+  const original = harness.store.writeIndex.bind(harness.store)
+  harness.store.writeIndex = async (entries) => {
+    commits += 1
+    return original(entries)
+  }
+  let result
+  try {
+    result = await harness.service.purgeAll()
+  } finally {
+    harness.store.writeIndex = original
+  }
+
+  assert.equal(result.purged, 6)
+  assert.equal(result.failed, 0)
+  assert.ok(commits <= 3, `expected a bounded number of index commits, saw ${commits}`)
+  assert.deepEqual(harness.store.entries(), [])
+  assert.deepEqual(await fs.readdir(harness.store.objectsDir), [])
+  await harness.dispose()
+})
+
+test('purge all forgets missing entries without one index commit per entry', async () => {
+  const harness = await createHarness()
+  const project = path.join(harness.root, 'project')
+  await fs.mkdir(project)
+  const missing = []
+  for (const id of ['session-a', 'session-b', 'session-c']) {
+    await harness.addSession({ id, cwd: project, title: id })
+    missing.push(await harness.service.trash(id))
+  }
+  for (const entry of missing) {
+    await fs.rm(path.join(harness.trashRoot, 'objects', entry.trashId), { recursive: true, force: true })
+  }
+  await harness.service.recover()
+  assert.equal(harness.store.entries().every((entry) => entry.state === 'missing'), true)
+
+  let commits = 0
+  const original = harness.store.writeIndex.bind(harness.store)
+  harness.store.writeIndex = async (entries) => {
+    commits += 1
+    return original(entries)
+  }
+  let result
+  try {
+    result = await harness.service.purgeAll()
+  } finally {
+    harness.store.writeIndex = original
+  }
+
+  assert.equal(result.forgotten, 3)
+  assert.equal(result.failed, 0)
+  assert.ok(commits <= 2, `expected the missing entries to share one commit, saw ${commits}`)
+  assert.deepEqual(harness.store.entries(), [])
+  await harness.dispose()
+})
+
+test('recovery rewrites only the metadata of entries it changed', async () => {
+  const harness = await createHarness()
+  const project = path.join(harness.root, 'project')
+  await fs.mkdir(project)
+  const entries = []
+  for (const id of ['session-a', 'session-b', 'session-c']) {
+    await harness.addSession({ id, cwd: project, title: id })
+    entries.push(await harness.service.trash(id))
+  }
+  // Recreate one original directory: recovery flags that entry and leaves the
+  // other two untouched.
+  const sourceDir = entries[0].members[0].originalSessionDir
+  await fs.mkdir(sourceDir, { recursive: true })
+
+  let metaWrites = 0
+  const original = harness.store.writeMeta.bind(harness.store)
+  harness.store.writeMeta = async (entry) => {
+    metaWrites += 1
+    return original(entry)
+  }
+  let summary
+  try {
+    summary = await harness.service.recover()
+  } finally {
+    harness.store.writeMeta = original
+  }
+
+  assert.equal(summary.changed, 1)
+  assert.equal(metaWrites, 1)
+  assert.match(harness.store.findEntry('session-a').lastError, /unexpectedly exists/)
+  await harness.dispose()
+})
+
 /**
  * Seed one two-member (parent + hidden subagent child) entry with explicit
  * member positions on disk, so the multi-directory crash matrix can be driven.
