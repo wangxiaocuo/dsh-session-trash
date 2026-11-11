@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { createTempDir, createLogger } from './helpers.js'
+import { createTempDir, createLogger, skipOnWindows } from './helpers.js'
 import { TrashStore, emptyIndex } from '../lib/store.js'
 import { TrashError } from '../lib/errors.js'
 
@@ -162,6 +162,7 @@ test('emptyIndex is versioned and empty', () => {
 })
 
 test('a failed index write keeps the previous commit and removes the temporary file', async (t) => {
+  if (skipOnWindows(t, 'POSIX permission bits are not enforced on Windows')) return
   if (typeof process.getuid === 'function' && process.getuid() === 0) {
     t.skip('permission checks are meaningless as root')
     return
@@ -177,6 +178,36 @@ test('a failed index write keeps the previous commit and removes the temporary f
     await assert.rejects(store.commit([]), (error) => error.code === 'EACCES' || error.code === 'EPERM')
   } finally {
     await fs.chmod(trashRoot, 0o700)
+  }
+  assert.equal(store.findEntry('session-a')?.title, 'A')
+  assert.equal((await fs.readdir(trashRoot)).includes('trash-index.json.tmp'), false)
+  const reopened = new TrashStore({ root: trashRoot, logger: createLogger() })
+  await reopened.init()
+  assert.equal(reopened.entries().length, 1)
+  await fs.rm(root, { recursive: true, force: true })
+})
+
+test('an index write blocked by its temporary path keeps the previous commit', async () => {
+  const root = await createTempDir()
+  const trashRoot = path.join(root, '.session-trash')
+  const store = new TrashStore({ root: trashRoot, logger: createLogger() })
+  await store.init()
+  const entry = { sessionId: 'session-a', trashId: '20260101T000000-aaaaaaaa', state: 'trashed', title: 'A', trashedAt: 1, startedAt: 1 }
+  await store.commit([entry])
+
+  // A directory at the temporary path makes the write fail on every platform,
+  // without relying on POSIX permission bits.
+  const blocker = path.join(trashRoot, 'trash-index.json.tmp')
+  await fs.mkdir(blocker)
+  try {
+    await assert.rejects(
+      store.commit([]),
+      (error) =>
+        error instanceof Error &&
+        (error.code === 'EISDIR' || error.code === 'EPERM' || error.code === 'EACCES' || error.code === 'EEXIST'),
+    )
+  } finally {
+    await fs.rm(blocker, { recursive: true, force: true })
   }
   assert.equal(store.findEntry('session-a')?.title, 'A')
   assert.equal((await fs.readdir(trashRoot)).includes('trash-index.json.tmp'), false)
