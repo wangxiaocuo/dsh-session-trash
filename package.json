@@ -47,14 +47,21 @@
     "test": "node test/run-unit.mjs",
     "test:coverage": "node test/run-unit.mjs --experimental-test-coverage",
     "test:e2e": "node test/e2e-web.mjs",
-    "test:smoke": "node test/smoke-host.mjs"
+    "test:smoke": "node test/smoke-host.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "test:dom": "node --test test/client-dom.test.js"
   },
   "dependencies": {
     "@deepseek-ai/dsh-home-paths": "0.2.2-rc.1",
     "@deepseek-ai/schemastery": "3.19.0"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.1.0"
+    "@deepseek-ai/cordis": "4.1.0",
+    "@types/node": "20.19.43",
+    "jsdom": "27.4.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "typescript": "5.9.3"
   },
   "dsh": {
     "bundle": {

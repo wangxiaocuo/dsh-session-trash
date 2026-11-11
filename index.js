@@ -34,7 +34,7 @@ function createLogger(ctx) {
   const prefix = 'dsh-session-trash'
   let sink = null
   try {
-    const factory = ctx.get('logger')
+    const factory = /** @type {any} */ (ctx.get('logger'))
     if (typeof factory === 'function') {
       const instance = factory(prefix)
       if (instance !== null && instance !== undefined && typeof instance.info === 'function') sink = instance
@@ -65,7 +65,7 @@ function createLogger(ctx) {
  * recovery, and the retention sweep.
  *
  * @param {import('@deepseek-ai/cordis').Context} ctx plugin context.
- * @param {object} config validated plugin configuration.
+ * @param {any} config validated plugin configuration.
  * @returns {void}
  */
 export function apply(ctx, config) {
