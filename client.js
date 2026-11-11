@@ -889,8 +889,14 @@ window.__ModuleLoader__.load({
           if (wrapRef.current !== null && !wrapRef.current.contains(event.target)) setOpen(false)
         }
         const onKeyDown = (event) => {
+          if (event.key === 'Tab') {
+            // Let focus leave the menu naturally; just stop leaving it open.
+            setOpen(false)
+            return
+          }
           if (event.key !== 'Escape') return
           event.preventDefault()
+          event.stopPropagation()
           setOpen(false)
           if (buttonRef.current !== null) buttonRef.current.focus()
         }
@@ -992,9 +998,11 @@ window.__ModuleLoader__.load({
               },
               items.map((item, index) =>
                 h(
-                  'div',
+                  React.Fragment,
                   { key: item.key },
-                  item.separatorBefore === true && index > 0 ? h('div', { className: 'dsh-trash__menuSeparator' }) : null,
+                  item.separatorBefore === true && index > 0
+                    ? h('div', { className: 'dsh-trash__menuSeparator', role: 'separator' })
+                    : null,
                   h(
                     'button',
                     {
@@ -1034,7 +1042,7 @@ window.__ModuleLoader__.load({
      * }} props dialog content and handlers.
      * @returns {import('react').ReactElement} the dialog overlay.
      */
-    function ConfirmDialog({ kind, entry, count, t, onCancel, onConfirm }) {
+    function ConfirmDialog({ kind, entry, count, t, onCancel, onConfirm, fallbackRef }) {
       const dialogRef = React.useRef(null)
       const cancelRef = React.useRef(null)
       const titleId = `dsh-trash-dialog-title-${kind}`
@@ -1068,7 +1076,12 @@ window.__ModuleLoader__.load({
         document.addEventListener('keydown', onKeyDown, true)
         return () => {
           document.removeEventListener('keydown', onKeyDown, true)
-          if (previous !== null && typeof previous.focus === 'function') previous.focus()
+          if (previous !== null && typeof previous.focus === 'function' && previous.isConnected !== false) {
+            previous.focus()
+            return
+          }
+          const fallback = fallbackRef === null || fallbackRef === undefined ? null : fallbackRef.current
+          if (fallback !== null && typeof fallback.focus === 'function') fallback.focus()
         }
       }, [onCancel])
 
@@ -2269,6 +2282,7 @@ window.__ModuleLoader__.load({
                   className: 'dsh-trash__panel',
                   key: 'panel',
                   ref: panelRef,
+                  tabIndex: -1,
                   'aria-busy': readsBusy ? 'true' : 'false',
                 },
                 panelBody,
@@ -2289,6 +2303,7 @@ window.__ModuleLoader__.load({
                 count: dialog.count,
                 t,
                 onCancel: closeDialog,
+                fallbackRef: panelRef,
                 onConfirm: () => {
                   const current = dialog
                   setDialog(null)
