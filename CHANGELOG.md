@@ -4,10 +4,11 @@
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-11-11
+
 ### Added
 
 - 回收站页可以清理不含会话日志的空无主对象（`POST /orphans/forget`）；可能含日志的无主对象继续保留，供人工处理。
-
 - CI 增加 `lib/**` 覆盖率门槛（行 85 / 分支 70 / 函数 84）和 README 的 CI badge。
 - 新增 tag 触发的 release workflow：typecheck、单测、smoke、真实 Host e2e 通过后 `npm publish --provenance` 并创建 GitHub Release；使用 npm Trusted Publishing，无需 `NPM_TOKEN`。
 
@@ -111,6 +112,7 @@
 
 - 回收站工具栏的「永久删除全部」与二次确认；`missing` 记录只移出索引，不删除会话文件。
 
+[0.6.5]: https://github.com/wangxiaocuo/dsh-session-trash/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/wangxiaocuo/dsh-session-trash/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/wangxiaocuo/dsh-session-trash/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/wangxiaocuo/dsh-session-trash/compare/v0.6.1...v0.6.2
