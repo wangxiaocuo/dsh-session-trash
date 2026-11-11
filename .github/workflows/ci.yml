@@ -45,7 +45,19 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test
+      - name: unit tests
+        shell: bash
+        run: pnpm test 2>&1 | tee "$RUNNER_TEMP/unit.log"
+      - name: annotate unit failures
+        if: failure()
+        shell: bash
+        run: |
+          log="$RUNNER_TEMP/unit.log"
+          if [ ! -f "$log" ]; then exit 0; fi
+          grep -aE "✖|not ok|AssertionError|Error:|expected|actual|Uncaught" "$log" | head -60 | while IFS= read -r line; do
+            echo "::error::$line"
+          done
+          exit 0
       - run: pnpm test:smoke
 
   coverage:
