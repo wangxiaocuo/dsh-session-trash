@@ -1,34 +1,67 @@
-# dsh-session-trash
+<p align="center">
+  <img src="assets/icon-512.png" width="96" alt="dsh-session-trash icon">
+</p>
 
-[![CI](https://github.com/wangxiaocuo/dsh-session-trash/actions/workflows/ci.yml/badge.svg)](https://github.com/wangxiaocuo/dsh-session-trash/actions/workflows/ci.yml)
+<h1 align="center">dsh-session-trash</h1>
 
-[简体中文](./README.md) | English
+<p align="center">A session trash for DeepSeek Harness. Move cold sessions out of the sidebar, keep the logs local, and restore them within the retention window.</p>
 
-[GitHub](https://github.com/wangxiaocuo/dsh-session-trash) · [npm](https://www.npmjs.com/package/@wangxiaocuo/dsh-session-trash) · [Changelog](./CHANGELOG.md)
+<p align="center">
+  <a href="https://github.com/wangxiaocuo/dsh-session-trash/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/wangxiaocuo/dsh-session-trash/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://www.npmjs.com/package/@wangxiaocuo/dsh-session-trash"><img alt="npm version" src="https://img.shields.io/npm/v/@wangxiaocuo/dsh-session-trash"></a>
+  <a href="https://www.npmjs.com/package/@wangxiaocuo/dsh-session-trash"><img alt="npm downloads" src="https://img.shields.io/npm/dm/@wangxiaocuo/dsh-session-trash"></a>
+  <img alt="license" src="https://img.shields.io/npm/l/@wangxiaocuo/dsh-session-trash">
+  <img alt="node" src="https://img.shields.io/node/v/@wangxiaocuo/dsh-session-trash">
+</p>
 
-A session trash for DeepSeek Harness. Move cold sessions out of the sidebar without deleting their logs, restore them within the retention window, or delete the logs permanently. Built for DSH 0.2.2-rc.1 on Desktop and Web. Host and Client ship in one package, with no build step.
+<p align="center"><a href="./README.md">简体中文</a> | English · <a href="https://github.com/wangxiaocuo/dsh-session-trash">GitHub</a> · <a href="./CHANGELOG.md">Changelog</a> · <a href="https://github.com/wangxiaocuo/dsh-session-trash/issues">Issues</a></p>
 
-Status: feature complete. CI (GitHub Actions) runs the unit tests, the Host smoke test, and the real `dsh web` end-to-end suite on Ubuntu (Node 20/22) and Windows (Node 22), booting the Host from an npm-installed DSH runtime; macOS also ran the suite against the real desktop Host manually. Windows skips the cases that rely on POSIX permission bits.
+A sidebar collects sessions you talked to once. Deleting them feels wasteful, and keeping them clutters the sidebar.
+
+This plugin adds a trash to DSH. Right-click a cold session to move it out of the sidebar; its log stays on disk. The Trash page in Settings lists those sessions, restores them within the retention window, and deletes the logs automatically when the window ends. If you are sure you no longer need one, delete it permanently.
+
+Moving and restoring only touch the session directory. Attachments, images, the projection cache, and the search index are left alone. The index is committed atomically, so a process that dies mid-operation finishes or rolls back on the next startup.
 
 ## Features
 
-- Right-click a session in the sidebar and choose "Move to trash". It is available for cold sessions with no running turn, job, subagent, or scheduled task; hidden subagent children move with their parent and are restored together.
-- For sessions that are still open, still running work, or own visible child sessions, the menu keeps a labelled explanatory "Move to trash" item that states why the move is unavailable instead of hiding the entry entirely.
+### Trashing sessions
+
+- Right-click a cold session in the sidebar and choose "Move to trash". A session with a running turn, job, subagent, or scheduled task cannot be trashed.
+- Hidden subagent children move with their parent and come back with it.
+- When a session cannot be trashed, the menu keeps a labelled explanatory item that opens and states the reason, instead of making the entry disappear.
 - After the move, the shared DSH Toast offers one action: Undo. Undo tries a normal restore first and falls back to an orphan restore when the original workspace is gone.
-- The Trash page in Settings shows the conversation title, Session ID, original workspace, trashed date, remaining days, size, and status. The title is folded from the session log; entries recorded by earlier releases that stored the workspace name as the title are repaired from DSH's session-projection cache at startup. The list supports search, filters, sorting by trashed date/title/size/expiry, and paging at 50 rows per page.
-- Entries with hidden sub-sessions show a count badge and can expand to list every member (parent/child conversation titles, session IDs, and sizes); restore and permanent deletion still operate on the whole tree.
-- Select multiple entries to restore them as a batch (only rows whose workspace still exists), including a select-all-page checkbox.
-- Row actions include restore, restore as orphan, permanent deletion, removal from the index, copying the Session ID, and revealing the original workspace in Finder or Explorer.
-- The toolbar's "Delete all permanently" empties the whole trash after one confirmation: it deletes every trashed session log and drops file-missing records from the index. Attachments, images, and search-index rows are not deleted.
-- Cleanup keeps entries for 30 days by default and runs every 6 hours. It also runs shortly after activation and when the Trash page opens. Failed cleanup runs are retried with exponential backoff, and the page shows the failure.
-- The index is committed atomically and the previous index is kept as `.bak`. If both the index and the backup are unreadable, the plugin enters protection mode and can rebuild the index from each object's `meta.json`.
-- Rename, fork, archive, and copy Session ID stay in the shipped DSH sidebar menu. The plugin does not reimplement them.
+
+### The Trash page
+
+Settings, then Trash.
+
+- Each row shows the conversation title, Session ID, original workspace, trashed date, remaining days, size, and status. The title is folded from the session log; entries written by earlier releases that stored the workspace name as the title are repaired from DSH's session-projection cache at startup.
+- Search, filters, and sorting by trashed date / title / size / expiry, with 50 rows per page.
+- An entry with hidden children shows a "N child sessions" badge and expands to list each member with its title, Session ID, and size. Restore and permanent deletion cover the whole tree; there is no partial restore.
+- Row actions are restore, restore as orphan, permanent deletion, removal from the index, copying the Session ID, and revealing the original workspace in Finder or Explorer.
+- Select several entries to restore them as a batch (only rows whose workspace still exists), including a select-all-page checkbox.
+- "Delete all permanently" in the toolbar empties the whole trash after one confirmation, including entries that have not expired.
+
+### Automatic cleanup
+
+- Entries are kept for 30 days by default, with a sweep every 6 hours; activation and opening the Trash page also trigger a check. Whether expired entries are deleted is controlled by `enableAutoCleanup`.
+- Failed sweeps are retried with exponential backoff, and the page shows the failure.
+
+### Reliability
+
+- The index is committed atomically and the previous commit is kept as `.bak`. If both the index and the backup are unreadable, the plugin enters protection mode, refuses writes, and can rebuild from each object's `meta.json`.
+- After a crash or power loss, unfinished `trashing`, `restoring`, and `purging` states are settled on the next startup, so a session log is never lost by accident.
+- Multiple DSH processes sharing one `DSH_HOME` serialize writes through `.lock`; same-origin tabs sync through `BroadcastChannel`, with no focus change or manual refresh.
+
+### Relationship to DSH's own menu
+
+Rename, fork, archive, and copy Session ID stay in the shipped DSH sidebar menu. The plugin does not reimplement them.
 
 ## Installation
 
 The plugin is published on npm ([`@wangxiaocuo/dsh-session-trash`](https://www.npmjs.com/package/@wangxiaocuo/dsh-session-trash)); the plugin dialog also accepts a GitHub address or a local directory.
 
-Installation and removal use the current profile's pnpm. Desktop bundles pnpm; a `dsh web` started from source needs pnpm on `PATH`, and installing from GitHub also needs git and working access to GitHub.
+It needs DSH `^0.2.2-rc.1` and Node.js 20 or newer, on Desktop or Web. Installation and removal use the current profile's pnpm. Desktop bundles pnpm; a `dsh web` started from source needs pnpm on `PATH`, and installing from GitHub also needs git and working access to GitHub.
 
 ### Install from DSH (recommended)
 
@@ -38,18 +71,14 @@ Installation and removal use the current profile's pnpm. Desktop bundles pnpm; a
 4. Click **Install**. DSH resolves the package name, description, and version, then runs pnpm. The command and output are under **Show install details**.
 5. Click **Enable now** when it finishes. Restart DSH if prompted and refresh the page in the Web app. The context menu and the Trash settings page appear afterwards.
 
-Local directory: clone the repository, run `pnpm install` in the directory (a directory-link bundle uses its own `node_modules`), then enter the absolute path of that directory.
+### Install from Git or a local directory
 
-If an install fails, start with the pnpm output and the Host log path under **Show install details**:
+- A Git address must point at the repository root, for example `git+https://github.com/wangxiaocuo/dsh-session-trash.git`.
+- For a local directory, clone the repository, run `pnpm install` in it (a directory-link bundle uses its own `node_modules`), then enter the absolute path of that directory.
 
-- No such plugin was found: check the spelling, wait for the mirror, or install from a Git address or local directory instead.
-- No registry could be reached: check the network or proxy, or install from a local directory.
-- The package declares no bundle, or the path is not a valid plugin package: the Git address must point at the repository root, and a local path must be the package directory.
-- The install finished but nothing shows up: make sure the bundle is enabled on the Plugins page; a profile without HMR needs a DSH restart, and the Web client needs a page refresh.
+### Let an agent install it
 
-### Let the agent install it
-
-Ask the agent to run one of these. The operation needs `danger-full-access` or a separate approval:
+Ask the agent to run one of these. The operation needs `danger-full-access` or a separate approval.
 
 ```text
 plugin_manager install_bundle  target=@wangxiaocuo/dsh-session-trash
@@ -80,6 +109,23 @@ For an npm install, open Session trash on the Plugins panel and click **Update**
 
 To uninstall, open the same detail page, click **Uninstall**, and confirm; the profile dependency is removed. You can also remove it from the profile bundles and dependencies by hand and restart. Uninstalling does not delete `<DSH_HOME>/.session-trash`; delete that directory manually when its logs are no longer needed.
 
+### Troubleshooting an install
+
+Start with the pnpm output and the Host log path under **Show install details**.
+
+- If it reports that no such plugin was found, check the spelling, wait for the mirror, or install from a Git address or local directory instead.
+- If no registry can be reached, check the network or proxy, or install from a local directory.
+- If it reports that the package declares no bundle, or that the path is not a valid plugin package, point the Git address at the repository root or enter the package directory itself.
+- If the install finished but nothing shows up, make sure the bundle is enabled on the Plugins page; a profile without HMR needs a DSH restart, and the Web client needs a page refresh.
+
+## Usage
+
+Right-click a cold session and choose "Move to trash". After the Toast disappears, open the Trash page in Settings and restore it row by row or in a batch, or delete it permanently. When the original workspace directory is gone, the page asks for confirmation and restores the session as an orphan under "Ungrouped".
+
+To empty the trash at once, use "Delete all permanently" in the toolbar and confirm; entries that have not expired are deleted too.
+
+If the menu will not let you trash a session, check the [FAQ](#faq) first. Most often the session is still live, and restarting DSH is enough.
+
 ## Configuration
 
 Configure the plugin row in the profile patch:
@@ -103,13 +149,28 @@ Configure the plugin row in the profile patch:
 
 Defaults apply when `config` is omitted. Invalid values reject activation instead of falling back to defaults. Changing an ordinary field restarts the plugin.
 
-## Usage
+## Storage and recovery
 
-Right-click a cold session and choose "Move to trash". After the Toast disappears, open Settings, then Trash, and restore the session. If the original workspace directory is gone, the page asks for confirmation and restores the session as an orphan under "Ungrouped". To empty the trash at once, use "Delete all permanently" in the toolbar and confirm; entries that have not expired are deleted too.
+```text
+<DSH_HOME>/.session-trash/
+  trash-index.json          # authoritative index
+  trash-index.json.bak      # previous committed index
+  .lock                     # cross-process lock
+  objects/
+    <trashId>/
+      meta.json             # object metadata
+      session/              # the moved parent session directory
+      children/
+        <sessionId>/        # hidden subagent child directory moved along
+```
 
-Trash rows that own hidden subagent children show a badge with the child count; restore and permanent deletion always cover the whole tree.
+The index is committed atomically with `tmp`, `fsync`, and `rename`, and the previous commit is kept as `.bak`. On activation and before every sweep, the plugin settles unfinished `trashing`, `restoring`, and `purging` entries. It completes what can be completed, rolls back what can be rolled back, marks uncertain cases as `missing`, and never deletes a session log during that recovery pass.
 
-The current DSH version keeps a live agent for a session after it is opened, until the Host process exits. An idle session is still live, so the menu item stays hidden. Restart DSH before trashing it, or archive it. A second DSH instance does not detect a session that is live in another process, so do not use one to bypass this check.
+A same-filesystem move uses `rename`. A cross-filesystem move copies into a temporary directory, verifies regular-file count and byte count, publishes with `rename`, then removes the source. Any failure cleans up the temporary directory and keeps the source. Symlinks are copied as symlinks, not followed.
+
+On POSIX filesystems, the trash root uses `0700` permissions and the index and metadata files use `0600`. A lock older than 10 minutes is treated as stale.
+
+The index schema is v2; a v1 index is upgraded automatically on startup and preserved as `.bak`. Older plugin releases cannot read v2 and enter protection mode, so empty the trash before downgrading.
 
 ## HTTP API
 
@@ -140,29 +201,6 @@ Restore and maintenance refusals include `TRASH_ENTRY_NOT_FOUND`, `TRASH_STATE_I
 
 `/state` entries gain `subagentCount` (hidden children moved along) and `members` (parent first, each with `sessionId`, `origin`, and `sizeBytes`); `sizeBytes`/`fileCount` cover the whole tree. The `entry` returned by `/trash` uses the same shape. Entries also carry `lastErrorCode` (a stable category the page localizes) and `lastError` (the raw English diagnostic, used only as a tooltip).
 
-## Storage and recovery
-
-```text
-<DSH_HOME>/.session-trash/
-  trash-index.json          # authoritative index
-  trash-index.json.bak      # previous committed index
-  .lock                     # cross-process lock
-  objects/
-    <trashId>/
-      meta.json             # object metadata
-      session/              # the moved parent session directory
-      children/
-        <sessionId>/        # hidden subagent child directory moved along
-```
-
-The index is committed atomically with `tmp`, `fsync`, and `rename`, and the previous commit is kept as `.bak`. On activation and before every sweep, the plugin settles unfinished `trashing`, `restoring`, and `purging` entries. It completes what can be completed, rolls back what can be rolled back, marks uncertain cases as `missing`, and never deletes a session log during that recovery pass.
-
-A same-filesystem move uses `rename`. A cross-filesystem move copies into a temporary directory, verifies regular-file count and byte count, publishes with `rename`, then removes the source. Any failure cleans up the temporary directory and keeps the source. Symlinks are copied as symlinks, not followed.
-
-On POSIX filesystems, the trash root uses `0700` permissions and the index and metadata files use `0600`. A lock older than 10 minutes is treated as stale.
-
-The index schema is v2; a v1 index is upgraded automatically on startup and preserved as `.bak`. Older plugin releases cannot read v2 and enter protection mode, so empty the trash before downgrading.
-
 ## Limitations
 
 - The current DSH version keeps an opened session live until the Host process exits. The context menu then shows the explanatory item instead of an actionable move; restart DSH before trashing it.
@@ -179,6 +217,36 @@ The index schema is v2; a v1 index is upgraded automatically on startup and pres
 - macOS path comparison is case-insensitive. On a case-sensitive APFS volume, paths that differ only by case are treated as the same location.
 - Multiple DSH processes sharing one `DSH_HOME` serialize trash operations through `.lock`. The Host retries briefly before reporting `LOCKED`, and the Client retries once automatically; a process paused for more than 10 minutes can lose the lock to another process.
 
+## FAQ
+
+### Why is "Move to trash" missing from the context menu
+
+The session is probably still live: it has been opened and the current Host process has not exited. It may also be running a turn, job, subagent, or scheduled task. Restart DSH and try again. A parent session with visible children should be archived instead.
+
+### Does moving a session to the trash delete it
+
+No. The session directory moves under `<DSH_HOME>/.session-trash/objects/` and stops showing in its workspace. You can restore it from the Trash page during the retention window; the log is deleted on expiry or on a manual permanent deletion.
+
+### Does permanent deletion remove attachments and images
+
+No. The plugin deletes the session log only; attachments, images, the projection cache, and the search index stay where they are.
+
+### Where does a restored session go
+
+Back to its original workspace. If that workspace directory no longer exists, choose "Restore as orphan" and the session returns to "Ungrouped"; the workspace directory is not recreated.
+
+### Can I keep the trash forever
+
+Yes. Set `enableAutoCleanup` to `false` and expired entries are no longer deleted automatically. `retentionDays` still drives the remaining-days column, and manual permanent deletion keeps working.
+
+### What happens with two DSH instances at once
+
+The `.lock` file serializes writes to the trash. Live state is not shared between instances, so the other instance will not stop you; do not use it to bypass the check.
+
+### Can I downgrade the plugin
+
+The index schema is v2 and older releases cannot read it; they enter protection mode. Empty the trash before downgrading.
+
 ## Development
 
 ```bash
@@ -192,36 +260,42 @@ npm run test:e2e   # real dsh web end-to-end (desktop app or npm-installed DSH)
 
 The Host smoke test wires the plugin into a real Cordis context through the `@deepseek-ai/cordis` devDependency, creates its own temporary `DSH_HOME`, and removes it afterwards; it does not need the desktop app. Set `DSH_SMOKE_KEEP=1` to keep the temporary home for debugging. `pnpm test` enumerates the test files through `test/run-unit.mjs`, so it does not depend on shell glob expansion and behaves the same on Windows and POSIX shells.
 
-What CI verifies:
+The checks below run in CI; the last row is run by hand.
 
 | Check | Verified environment |
 |---|---|
-| Unit tests, Host smoke test | CI: Ubuntu Node 20/22, Windows Node 22 |
-| Package contents (`npm pack`) | CI: Ubuntu |
-| Coverage thresholds (`lib/**`, lines 85 / branches 70 / functions 84) | CI: Ubuntu Node 22 |
-| Real `dsh web` end to end (npm-installed DSH) | CI: Ubuntu, Windows (Node 22) |
+| Unit tests, Host smoke test | CI covers Ubuntu Node 20/22, Windows Node 22 |
+| Package contents (`npm pack`) | CI covers Ubuntu |
+| Coverage thresholds (`lib/**`, lines 85 / branches 70 / functions 84) | CI covers Ubuntu Node 22 |
+| Real `dsh web` end to end (npm-installed DSH) | CI covers Ubuntu, Windows (Node 22) |
 | Real `dsh web` end to end (desktop app) | macOS + DSH 0.2.2-rc.1 (run manually) |
 
-`npm run test:e2e` boots a real `dsh web` Host in a temporary `DSH_HOME` and runs the full flow. By default it discovers the desktop app in the platform's usual install locations (or uses `DSH_ELECTRON`); set `DSH_E2E_DSH_BIN` to the `lib/bin.js` of an npm-installed `@deepseek-ai/dsh` to boot the Host with plain Node instead - CI and Linux/Windows use that mode, with no desktop app required. When no Host is found it prints a skip message and exits 0. The cleanup-failure scenario that relies on POSIX permission bits is skipped on Windows. Set `DSH_E2E_KEEP=1` to keep the temporary home and logs.
+`npm run test:e2e` boots a real `dsh web` Host in a temporary `DSH_HOME` and runs the full flow. By default it discovers the desktop app in the platform's usual install locations (or uses `DSH_ELECTRON`); set `DSH_E2E_DSH_BIN` to the `lib/bin.js` of an npm-installed `@deepseek-ai/dsh` to boot the Host with plain Node instead, which is how CI and Linux/Windows run it, with no desktop app required. When no Host is found it prints a skip message and exits 0. The cleanup-failure scenario that relies on POSIX permission bits is skipped on Windows. Set `DSH_E2E_KEEP=1` to keep the temporary home and logs.
 
 ### Releasing (maintainers)
 
 1. Bump the version in `package.json` and update `CHANGELOG.md`, then commit and push.
-2. Create and push a tag: `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`.
-3. The tag runs [release.yml](.github/workflows/release.yml): typecheck, unit tests, smoke test, real-host e2e, then `npm publish --provenance` and a GitHub release.
+2. Create and push a tag, for example `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`.
+3. The tag runs [release.yml](.github/workflows/release.yml), which passes typecheck, unit tests, the smoke test, and real-host e2e before `npm publish --provenance` and a GitHub release.
 
-Publishing uses npm Trusted Publishing (OIDC), so no `NPM_TOKEN` is required: add repository `wangxiaocuo/dsh-session-trash` and workflow `release.yml` under the package's Settings -> Publishing access -> Trusted publishers on npmjs.com. To use an automation token instead, uncomment the `NODE_AUTH_TOKEN` environment variable in release.yml and add the matching secret.
+Publishing uses npm Trusted Publishing (OIDC), so no `NPM_TOKEN` is required. Add repository `wangxiaocuo/dsh-session-trash` and workflow `release.yml` under the package's Settings -> Publishing access -> Trusted publishers on npmjs.com. To use an automation token instead, uncomment the `NODE_AUTH_TOKEN` environment variable in release.yml and add the matching secret.
 
-Project layout:
+### Project layout
 
 ```text
 README.md / README.en.md   Chinese / English docs
-LICENSE              MIT license
-index.js              Host entry, Config, and service wiring
-client.js             Client UI, sidebar menu, and Toast
-lib/                  index, lock, moves, eligibility, cleanup, HTTP, and state
-locale/               plugin display names and descriptions
-test/                 unit tests, Host smoke test, real dsh web e2e
+LICENSE                    MIT license
+assets/icon-512.png        512 px icon used by the plugin market
+icon.svg                   Vector logo used in the README header and plugin list
+index.js                   Host entry, Config, and service wiring
+client.js                  Client UI, sidebar menu, and Toast
+lib/                       index, lock, moves, eligibility, cleanup, HTTP, and state
+locale/                    plugin display names and descriptions
+test/                      unit tests, Host smoke test, real dsh web e2e
 ```
 
-The plugin logo (`icon.svg`) is an original design for this project: a wide lidded bin holding a single conversation bubble, drawn in mint, ink and coral to read at the 36 px tile size used by the plugin list. The in-app context menu, settings-section icon, and empty state still use the `trash-outline` artwork from the DeepSeek Harness product icon set, MIT licensed, © 2026 DeepSeek, so they match DSH's own "Delete workspace" glyph. The project itself is MIT licensed; see [LICENSE](./LICENSE).
+## License
+
+[MIT](./LICENSE).
+
+The plugin logo (`icon.svg`, `assets/icon-512.png`) is an original design for this project: a wide lidded bin holding a single conversation bubble, drawn in mint, ink and coral to read at the 36 px tile size used by the plugin list. The in-app context menu, settings-section icon, and empty state still use the `trash-outline` artwork from the DeepSeek Harness product icon set, MIT licensed, © 2026 DeepSeek, so they match DSH's own "Delete workspace" glyph.
