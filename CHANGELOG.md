@@ -2,6 +2,24 @@
 
 本文件记录这个插件的所有重要变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Added
+
+- 只读扫描所有会话日志（含回收站对象）里的附件引用，`/state.storage.attachments` 增加 `referencedBytes`、`orphanBytes`、`unclassifiedBytes` 和 `scan`；页面显示“附件 X（其中 Y 无引用）”。
+- 扫描按文件大小和 mtime 缓存：首次扫描约几百毫秒，后续 `/state` 只做 stat；拼接 zstd 帧逐帧解码，正在追加的活跃日志尾部单独计入 `tornFiles`。
+- 扫描不完整（日志损坏、目录不可读、缺少 zstd 解码器）时只显示“引用扫描不完整/不可用”，不发布无引用估算；附件目录读不全时 `attachments.complete=false`，页面显示“附件统计不完整”。本版本只读，不删除任何附件。
+
+### Changed
+
+- 附件统计改为按内容哈希索引，`files/<hash>/<name>` 与 `file-objects/<hash>` 不再重复计算；不符合已知布局的文件计入 `unclassifiedBytes`。
+- README 增加引用扫描、Node zstd 依赖和“只读不删”的说明。
+
+### Tests
+
+- 覆盖多帧 zstd 解码、撕裂尾部、损坏日志、不可读目录、回收站日志、缓存复用、引用/无引用拆分、扫描不完整时不给孤儿估算，以及页面扫描状态文案。
+- 修复 `createTrashId` 测试跨秒边界时偶发失败：改为校验时间前缀不递减，而不是要求两次调用落在同一秒。
+
 ## [0.7.0] - 2026-11-14
 
 ### Added

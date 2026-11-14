@@ -643,6 +643,10 @@ try {
   assert.equal(initial.body.storage.trashLogs.count, 0)
   assert.equal(typeof initial.body.storage.sessionLogs.bytes, 'number')
   assert.equal(initial.body.storage.attachments.files, 0)
+  assert.equal(initial.body.storage.attachments.complete, true)
+  assert.equal(initial.body.storage.attachments.scan.status, 'complete')
+  assert.equal(initial.body.storage.attachments.referencedBytes, 0)
+  assert.equal(initial.body.storage.attachments.orphanBytes, 0)
   const bootResponse = await fetch(`${api.base}/`, {
     headers: { cookie: api.cookie },
     signal: AbortSignal.timeout(15_000),

@@ -586,7 +586,14 @@ test('the page shows the storage breakdown and labels row bytes as session logs'
     totalBytes: 9.5 * 1024 * 1024,
     sessionLogs: { count: 3, bytes: 2 * 1024 * 1024 },
     trashLogs: { count: 1, bytes: 2048 },
-    attachments: { files: 4, bytes: 6 * 1024 * 1024 },
+    attachments: {
+      files: 4,
+      bytes: 6 * 1024 * 1024,
+      referencedBytes: 2 * 1024 * 1024,
+      orphanBytes: 4 * 1024 * 1024,
+      unclassifiedBytes: 0,
+      scan: { status: 'complete', at: Date.now(), scannedFiles: 3, failedFiles: 0, tornFiles: 0 },
+    },
     attachmentCache: { files: 2, bytes: 1024 * 1024 },
     projectionCache: {
       records: 3,
@@ -603,9 +610,64 @@ test('the page shows the storage breakdown and labels row bytes as session logs'
   assert.ok(storage !== undefined)
   const storageText = textContent(storage)
   assert.ok(storageText.includes('本机会话数据'))
-  assert.ok(storageText.includes('附件 6 MB'))
+  assert.ok(storageText.includes('附件 6 MB（其中 4 MB 无引用）'))
   assert.ok(storageText.includes('可清扫 256 KB'))
   assert.ok(textOf(tree).some((value) => value.includes('日志 2 KB')))
+})
+
+test('the storage line reports an incomplete reference scan without a guessed number', async () => {
+  const { factory, mini } = await loadModule()
+  const payload = statePayload()
+  payload.storage = {
+    measuredAt: Date.now(),
+    totalBytes: 8 * 1024 * 1024,
+    sessionLogs: { count: 1, bytes: 1024 * 1024 },
+    trashLogs: { count: 0, bytes: 0 },
+    attachments: {
+      files: 2,
+      bytes: 6 * 1024 * 1024,
+      referencedBytes: null,
+      orphanBytes: null,
+      unclassifiedBytes: 0,
+      scan: { status: 'partial', at: Date.now(), scannedFiles: 3, failedFiles: 1, tornFiles: 0 },
+    },
+    attachmentCache: { files: 0, bytes: 0 },
+    projectionCache: { records: 0, bytes: 0, sweepableRecords: 0, sweepableBytes: 0 },
+  }
+  const client = createClient(factory, mini, payload)
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+  const storageText = textContent(elementByClass(tree, 'dsh-trash__storage'))
+  assert.ok(storageText.includes('附件 6 MB（引用扫描不完整）'))
+  assert.equal(storageText.includes('无引用'), false)
+})
+
+test('the storage line reports incomplete attachment stats without a guessed number', async () => {
+  const { factory, mini } = await loadModule()
+  const payload = statePayload()
+  payload.storage = {
+    measuredAt: Date.now(),
+    totalBytes: 8 * 1024 * 1024,
+    sessionLogs: { count: 1, bytes: 1024 * 1024 },
+    trashLogs: { count: 0, bytes: 0 },
+    attachments: {
+      files: 2,
+      bytes: 6 * 1024 * 1024,
+      complete: false,
+      referencedBytes: null,
+      orphanBytes: null,
+      unclassifiedBytes: 0,
+      scan: { status: 'complete', at: Date.now(), scannedFiles: 3, failedFiles: 0, tornFiles: 0 },
+    },
+    attachmentCache: { files: 0, bytes: 0 },
+    projectionCache: { records: 0, bytes: 0, sweepableRecords: 0, sweepableBytes: 0 },
+  }
+  const client = createClient(factory, mini, payload)
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+  const storageText = textContent(elementByClass(tree, 'dsh-trash__storage'))
+  assert.ok(storageText.includes('附件 6 MB（附件统计不完整）'))
+  assert.equal(storageText.includes('无引用'), false)
 })
 
 test('a row shows the recorded workspace title and keeps the full path as the tooltip', async () => {

@@ -42,7 +42,7 @@ Moving and restoring only touch the session directory; attachments and images st
 Settings, then Trash.
 
 - Each row shows the conversation title, Session ID, original workspace, trashed date, remaining days, log size, and status. The row's "Log" figure covers session logs only, never attachments or images. The title is folded from the session log; entries written by earlier releases that stored the workspace name as the title are repaired from DSH's session-projection cache at startup.
-- A line below the toolbar shows this device's session data: logs, attachments, and cache by category, plus the projection-cache bytes the startup sweep can reclaim. Attachments are reported as a total; the page does not guess which objects are unreferenced.
+- A line below the toolbar shows this device's session data: logs, attachments, and cache by category, plus the projection-cache bytes the startup sweep can reclaim. For attachments it also shows how many bytes are unreferenced (read-only scan; no file is deleted).
 - Search, filters, and sorting by trashed date / title / size / expiry, with 50 rows per page.
 - An entry with hidden children shows a "N child sessions" badge and expands to list each member with its title, Session ID, and size. Restore and permanent deletion cover the whole tree; there is no partial restore.
 - Row actions are restore, restore as orphan, permanent deletion, removal from the index, copying the Session ID, and revealing the original workspace in Finder or Explorer.
@@ -208,7 +208,11 @@ Restore and maintenance refusals include `TRASH_ENTRY_NOT_FOUND`, `TRASH_STATE_I
 
 `/state.stats.cleanup` reports the last cleanup attempt, the next sweep, a pending retry, consecutive failures, and the last run summary.
 
-`/state.storage` breaks down this device's session data: `sessionLogs` (stored session logs), `trashLogs` (trashed logs), `attachments` (durable attachment objects), `attachmentCache` (regenerable request cache), `projectionCache` (record count and `sweepableBytes`), and `totalBytes`. Attachments are a total only: finding which objects are unreferenced requires scanning every log, which belongs to the later reclamation feature; this release does not guess that number.
+`/state.storage` breaks down this device's session data: `sessionLogs` (stored session logs), `trashLogs` (trashed logs), `attachments` (durable attachment objects), `attachmentCache` (regenerable request cache), `projectionCache` (record count and `sweepableBytes`), and `totalBytes`.
+
+`attachments` carries `files`, `bytes`, `complete`, `referencedBytes`, `orphanBytes`, `unclassifiedBytes`, and `scan`. Every `/state` reconciles; the first one decompresses the logs: it performs a read-only scan of every session log (including logs inside the trash) for `sha256` references, then compares them with the object hashes under `attachments/v1`. `referencedBytes` and `orphanBytes` are published only when the scan is complete; otherwise both are `null` and `scan.status` is `partial` or `unavailable`. `complete: false` means the attachment directories could not be read in full, which also suppresses the orphan estimate. Per-file results are cached by size and mtime, so later requests only stat the logs.
+
+**This release is read-only: it never deletes an attachment.** Reclamation and its confirmation flow belong to a later release. Without a zstd decoder in the Node runtime (roughly Node < 22.15), `scan.status` is `unavailable` and the page shows the attachment total only.
 
 `/state` entries gain `subagentCount` (hidden children moved along) and `members` (parent first, each with `sessionId`, `origin`, and `sizeBytes`); `sizeBytes`/`fileCount` cover the whole tree. The `entry` returned by `/trash` uses the same shape. Entries also carry `lastErrorCode` (a stable category the page localizes) and `lastError` (the raw English diagnostic, used only as a tooltip).
 
@@ -220,6 +224,7 @@ Restore and maintenance refusals include `TRASH_ENTRY_NOT_FOUND`, `TRASH_STATE_I
 - Orphan restore never recreates the original workspace directory and never reattaches the session to a workspace.
 - Archive and pin state survive trash and restore. The Trash page does not manage either set.
 - Permanent deletion removes the session log, its projection-cache record, and its workspace accounting (including archive and pin markers); a cleanup failure is logged and never rolls back an already-completed log deletion. Attachments and images are not deleted; the search index is derived data and DSH drops the deleted session on its next search.
+- The attachment reference scan is a read-only estimate. It needs Node's zstd decoder (Node 22.15+) and only reads durable log tails; a log that is still being appended is counted in `scan.tornFiles`. Deleting attachments will rescan with a grace period; this release never deletes them.
 - Unindexed objects (object directories whose `meta.json` is damaged or unreadable) are never deleted automatically; the page can only clean empty leftovers that hold no session log, and anything that may contain logs is left for manual inspection.
 - `/state` returns all entry summaries and the storage breakdown in one response. Search, filtering, and paging happen in the Client.
 - Same-origin tabs in the same browser sync index changes through `BroadcastChannel`; different browsers or machines still need a refresh.
@@ -241,6 +246,12 @@ No. The session directory moves under `<DSH_HOME>/.session-trash/objects/` and s
 ### Does permanent deletion remove attachments and images
 
 No. Attachments and images are content-addressed and may be shared by several sessions, so the plugin never deletes them per session. Permanent deletion removes the session log, its projection-cache record, and its workspace accounting; the search index drops the session on its next search. Global attachment reclamation is outside this release.
+
+### How is the attachment "unreferenced" figure calculated
+
+The plugin performs a read-only scan of session logs under `sessions/` and inside the trash, collects every `sha256` attachment ID they mention, and compares that set with the object hashes under `attachments/v1`. An object no session references counts as `orphanBytes`. A shared image still counts as referenced while at least one session mentions it. When the scan is incomplete the page says "reference scan incomplete" and publishes no orphan estimate. This release reports only; it does not delete.
+
+Only session logs are considered: unsaved pastes, staged uploads, and copies kept by third-party memory or index plugins are not in the reference set, so the unreferenced figure is a conservative estimate. The deletion slice will rescan with a grace period.
 
 ### Why is the trash total smaller than disk usage
 

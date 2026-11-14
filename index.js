@@ -6,6 +6,7 @@ import { createStateService } from './lib/state.js'
 import { createTrashService } from './lib/trash-service.js'
 import { createCleanupService } from './lib/cleanup.js'
 import { createStorageStats } from './lib/storage.js'
+import { createReferenceScanner } from './lib/references.js'
 import { registerApi } from './lib/http.js'
 
 /** Host services this plugin cannot work without. */
@@ -74,7 +75,8 @@ export function apply(ctx, config) {
   const scoped = config.debug ? logger : { ...logger, debug: () => {} }
   const paths = resolveTrashPaths()
   const store = new TrashStore({ root: paths.root, logger: scoped })
-  const storageStats = createStorageStats({ ctx, home: paths.home, logger: scoped })
+  const references = createReferenceScanner({ home: paths.home, logger: scoped })
+  const storageStats = createStorageStats({ ctx, home: paths.home, logger: scoped, references })
   const eligibility = createEligibility({ ctx, store, logger: scoped })
   const trashService = createTrashService({
     ctx,

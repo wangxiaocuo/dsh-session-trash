@@ -237,6 +237,9 @@ async function main() {
     assert.equal(typeof state.body.storage, 'object')
     assert.equal(typeof state.body.storage.totalBytes, 'number')
     assert.equal(typeof state.body.storage.attachments.files, 'number')
+    assert.equal(typeof state.body.storage.attachments.complete, 'boolean')
+    assert.equal(typeof state.body.storage.attachments.scan.status, 'string')
+    assert.ok(state.body.storage.attachments.orphanBytes === null || typeof state.body.storage.attachments.orphanBytes === 'number')
 
     const jsonHeaders = {
       host: '127.0.0.1:3080',

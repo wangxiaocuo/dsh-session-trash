@@ -145,6 +145,10 @@ window.__ModuleLoader__.load({
       logSizeHint: '仅会话日志，不含附件和图片',
       storageSummary: '本机会话数据 {total}：日志 {logs} · 附件 {attachments} · 缓存 {cache}',
       storageSweepable: '可清扫 {size}',
+      storageOrphan: '其中 {size} 无引用',
+      storageScanPartial: '引用扫描不完整',
+      storageScanUnavailable: '引用扫描不可用',
+      storageIndexPartial: '附件统计不完整',
       searchLabel: '搜索回收站',
       searchPlaceholder: '搜索标题、Session ID 或原始工作区',
       searchClear: '清除搜索',
@@ -334,6 +338,10 @@ window.__ModuleLoader__.load({
       logSizeHint: 'Session logs only; attachments and images are not included.',
       storageSummary: 'Session data on this device: {total} — logs {logs} · attachments {attachments} · cache {cache}',
       storageSweepable: '{size} sweepable',
+      storageOrphan: '{size} unreferenced',
+      storageScanPartial: 'reference scan incomplete',
+      storageScanUnavailable: 'reference scan unavailable',
+      storageIndexPartial: 'attachment stats incomplete',
       searchLabel: 'Search the trash',
       searchPlaceholder: 'Search title, Session ID, or original workspace',
       searchClear: 'Clear search',
@@ -2449,6 +2457,20 @@ window.__ModuleLoader__.load({
           data !== null && data !== undefined && data.storage !== null && typeof data.storage === 'object'
             ? data.storage
             : null
+        const attachmentBytes = formatBytes(storage?.attachments?.bytes)
+        const attachmentScan = storage?.attachments?.scan
+        const orphanBytes =
+          typeof storage?.attachments?.orphanBytes === 'number' ? storage.attachments.orphanBytes : null
+        let attachmentLabel = attachmentBytes
+        if (orphanBytes !== null && orphanBytes > 0) {
+          attachmentLabel += `（${format(t('storageOrphan'), { size: formatBytes(orphanBytes) })}）`
+        } else if (storage?.attachments?.complete === false) {
+          attachmentLabel += `（${t('storageIndexPartial')}）`
+        } else if (attachmentScan?.status === 'partial') {
+          attachmentLabel += `（${t('storageScanPartial')}）`
+        } else if (attachmentScan?.status === 'unavailable') {
+          attachmentLabel += `（${t('storageScanUnavailable')}）`
+        }
         const storageLine =
           storage === null || !(Number(storage.totalBytes) > 0)
             ? null
@@ -2460,7 +2482,7 @@ window.__ModuleLoader__.load({
                   logs: formatBytes(
                     (Number(storage.sessionLogs?.bytes) || 0) + (Number(storage.trashLogs?.bytes) || 0),
                   ),
-                  attachments: formatBytes(storage.attachments?.bytes),
+                  attachments: attachmentLabel,
                   cache: formatBytes(
                     (Number(storage.attachmentCache?.bytes) || 0) +
                       (Number(storage.projectionCache?.bytes) || 0),

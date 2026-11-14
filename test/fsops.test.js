@@ -151,7 +151,9 @@ test('createTrashId is time sortable and unique', () => {
   const second = createTrashId()
   assert.match(first, /^\d{8}T\d{6}-[0-9a-f]{8}$/)
   assert.notEqual(first, second)
-  assert.equal(first.slice(0, 15), second.slice(0, 15))
+  // Two calls may straddle a second boundary; the compact timestamp must
+  // still be non-decreasing so lexicographic sorting stays time sortable.
+  assert.ok(first.slice(0, 15) <= second.slice(0, 15))
 })
 
 test('path identity follows the platform case rules and Windows segments', () => {
