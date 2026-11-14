@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+## [0.6.9] - 2026-11-14
+
+### Fixed
+
+- 插件市场不再把本插件标成「会联网」：客户端调自己 Host API 的 `fetch` 改成同源路径字面量（`/plugins/dsh-session-trash/api/${pathname}`），插件市场用的静态扫描器（`dsh-trust-check`）据此可以证明请求留在 DSH 的源内，而不是把它当成参数无法追认的外连。运行时行为不变（仍是同源请求、`credentials: 'same-origin'`、CSRF 头不变）；目录里已有的能力记录要等新版本发布并被重新扫描后才会更新。
+
 ## [0.6.8] - 2026-11-11
 
 ### Changed
@@ -141,6 +147,7 @@
 
 - 回收站工具栏的「永久删除全部」与二次确认；`missing` 记录只移出索引，不删除会话文件。
 
+[0.6.9]: https://github.com/wangxiaocuo/dsh-session-trash/compare/v0.6.8...v0.6.9
 [0.6.8]: https://github.com/wangxiaocuo/dsh-session-trash/compare/v0.6.7...v0.6.8
 [0.6.7]: https://github.com/wangxiaocuo/dsh-session-trash/compare/v0.6.6...v0.6.7
 [0.6.6]: https://github.com/wangxiaocuo/dsh-session-trash/compare/v0.6.5...v0.6.6
