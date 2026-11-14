@@ -301,5 +301,3 @@ test/                      单测、Host 冒烟测试、真实 dsh web 端到端
 ## 许可证
 
 [MIT](./LICENSE)。
-
-插件 logo（`icon.svg`、`assets/icon-512.png`）是一口带盖的宽口回收桶，桶里放着一颗对话气泡，薄荷绿 / 墨蓝 / 珊瑚橙三段配色，按插件列表里 36px 的小尺寸绘制。界面内的右键菜单、设置页章节图标和空状态图标仍使用 DeepSeek Harness 产品图标集中的 `trash-outline` 图形，MIT 许可，© 2026 DeepSeek，以便和 DSH 自带的「删除工作区」图标保持一致。

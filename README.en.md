@@ -303,5 +303,3 @@ test/                      unit tests, Host smoke test, real dsh web e2e
 ## License
 
 [MIT](./LICENSE).
-
-The plugin logo (`icon.svg`, `assets/icon-512.png`) is an original design for this project: a wide lidded bin holding a single conversation bubble, drawn in mint, ink and coral to read at the 36 px tile size used by the plugin list. The in-app context menu, settings-section icon, and empty state still use the `trash-outline` artwork from the DeepSeek Harness product icon set, MIT licensed, © 2026 DeepSeek, so they match DSH's own "Delete workspace" glyph.
