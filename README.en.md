@@ -22,6 +22,12 @@ This plugin adds a trash to DSH. Right-click a cold session to move it out of th
 
 Moving and restoring only touch the session directory. Attachments, images, the projection cache, and the search index are left alone. The index is committed atomically, so a process that dies mid-operation finishes or rolls back on the next startup.
 
+<p align="center">
+  <img src="assets/trash-page.png" width="860" alt="The Trash page in DSH Settings, showing the session list, filters, search, and cleanup actions">
+</p>
+
+<p align="center"><sub>Settings → Trash. Search, filter, restore in bulk, or delete permanently.</sub></p>
+
 ## Features
 
 ### Trashing sessions
@@ -285,8 +291,8 @@ Publishing uses npm Trusted Publishing (OIDC), so no `NPM_TOKEN` is required. Ad
 ```text
 README.md / README.en.md   Chinese / English docs
 LICENSE                    MIT license
-assets/icon-512.png        512 px icon used by the plugin market
-icon.svg                   Vector logo used in the README header and plugin list
+assets/                    Plugin-market icon and README screenshots
+icon.svg                   Vector logo used by the plugin list
 index.js                   Host entry, Config, and service wiring
 client.js                  Client UI, sidebar menu, and Toast
 lib/                       index, lock, moves, eligibility, cleanup, HTTP, and state

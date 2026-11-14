@@ -22,6 +22,12 @@
 
 移入和恢复只搬动会话目录，附件、图片、投影缓存和搜索索引不跟着走。索引原子写入，进程中途退出后，下次启动会接着完成或回滚。
 
+<p align="center">
+  <img src="assets/trash-page.png" width="860" alt="DSH 设置页里的回收站，含会话列表、筛选、搜索和清理操作">
+</p>
+
+<p align="center"><sub>设置页 →「回收站」，可以搜索、筛选、批量恢复或永久删除。</sub></p>
+
 ## 功能
 
 ### 回收会话
@@ -283,8 +289,8 @@ Host 冒烟测试通过 `@deepseek-ai/cordis` 这个 devDependency 装配真实�
 ```text
 README.md / README.en.md   中文 / English 文档
 LICENSE                    MIT 许可证
-assets/icon-512.png        插件市场用的 512px 图标
-icon.svg                   README 头部和插件列表用的矢量 logo
+assets/                    插件市场图标和 README 截图
+icon.svg                   插件列表用的矢量 logo
 index.js                   Host 入口、Config 和服务装配
 client.js                  Client 界面、侧边栏菜单和 Toast
 lib/                       索引、锁、移动、资格判断、清理、HTTP 和状态投影
