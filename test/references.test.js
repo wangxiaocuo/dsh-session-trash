@@ -109,6 +109,10 @@ test('a torn live tail is reported without failing the scan', { skip: !canCompre
 })
 
 test('an unreadable log directory makes the scan partial', async (t) => {
+  if (!canCompress) {
+    t.skip('the zstd decoder is unavailable, so the scan short-circuits before listing')
+    return
+  }
   if (skipOnWindows(t, 'directory permissions are not enforced on Windows')) return
   if (skipAsRoot(t, 'root can read a 000 directory')) return
   const home = await createTempDir()
