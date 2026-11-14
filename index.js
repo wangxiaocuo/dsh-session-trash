@@ -5,6 +5,7 @@ import { createEligibility } from './lib/eligibility.js'
 import { createStateService } from './lib/state.js'
 import { createTrashService } from './lib/trash-service.js'
 import { createCleanupService } from './lib/cleanup.js'
+import { createStorageStats } from './lib/storage.js'
 import { registerApi } from './lib/http.js'
 
 /** Host services this plugin cannot work without. */
@@ -73,6 +74,7 @@ export function apply(ctx, config) {
   const scoped = config.debug ? logger : { ...logger, debug: () => {} }
   const paths = resolveTrashPaths()
   const store = new TrashStore({ root: paths.root, logger: scoped })
+  const storageStats = createStorageStats({ ctx, home: paths.home, logger: scoped })
   const eligibility = createEligibility({ ctx, store, logger: scoped })
   const trashService = createTrashService({
     ctx,
@@ -94,6 +96,7 @@ export function apply(ctx, config) {
     trashRootDisplay: paths.display,
     nextSweepAt: () => cleanupService.nextSweepAt(),
     cleanup: () => cleanupService.diagnostics(),
+    storageSnapshot: (entries) => storageStats.snapshot({ entries }),
   })
 
   ctx.effect(() => () => cleanupService.stop(), 'session-trash: cleanup disposal')
@@ -124,6 +127,16 @@ export function apply(ctx, config) {
       } catch (error) {
         logger.warn(
           `startup title repair failed: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
+        )
+      }
+      try {
+        const swept = await trashService.sweepProjectionCache()
+        if (swept.removed > 0) {
+          logger.info(`swept ${swept.removed} stale projection-cache records`)
+        }
+      } catch (error) {
+        logger.warn(
+          `startup projection-cache sweep failed: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,
         )
       }
       cleanupService.start()

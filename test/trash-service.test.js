@@ -562,6 +562,7 @@ test('purge all deletes every trashed session and forgets missing entries', asyn
   assert.equal(result.purged, 2)
   assert.equal(result.forgotten, 1)
   assert.equal(result.failed, 0)
+  assert.equal(result.freedBytes, trashedA.sizeBytes + trashedB.sizeBytes)
   assert.deepEqual(result.failures, [])
   assert.ok(result.changed > 0)
   assert.deepEqual(await fs.readdir(harness.store.objectsDir), [])
@@ -581,7 +582,7 @@ test('purge all deletes every trashed session and forgets missing entries', asyn
 test('purge all on an empty trash returns zero counts', async () => {
   const harness = await createHarness()
   const result = await harness.service.purgeAll()
-  assert.deepEqual(result, { purged: 0, forgotten: 0, failed: 0, failures: [], changed: 0 })
+  assert.deepEqual(result, { purged: 0, forgotten: 0, failed: 0, failures: [], freedBytes: 0, changed: 0 })
   assert.deepEqual(await fs.readdir(harness.store.objectsDir), [])
   assert.deepEqual(harness.store.entries(), [])
   await harness.dispose()
@@ -919,6 +920,144 @@ test('cascade purge deletes every session directory of the tree', async () => {
   assert.equal(result.purged, 1)
   assert.equal(result.failed, 0)
   await assert.rejects(fs.stat(harness.store.objectDir(entry.trashId)))
+  assert.deepEqual(harness.store.entries(), [])
+  await harness.dispose()
+})
+
+test('purge releases workspace accounting and the projection-cache record', async () => {
+  const harness = await createHarness()
+  const project = path.join(harness.root, 'project')
+  await fs.mkdir(project)
+  await harness.addSession({ id: 'session-a', cwd: project, title: 'A' })
+  const workspace = harness.workspaces.add({ id: 'ws-1', path: project, sessionIds: ['session-a'] })
+  const cacheFile = await harness.writeCachedTitle('session-a', 'A')
+
+  const entry = await harness.service.trash('session-a')
+  assert.equal((await fs.stat(cacheFile)).isFile(), true)
+  const purged = await harness.service.purge('session-a')
+  assert.equal(purged.freedBytes, entry.sizeBytes)
+
+  assert.deepEqual(workspace.sessionIds, [])
+  assert.deepEqual(workspace.calls, [['detach', 'session-a']])
+  assert.deepEqual(harness.workspaces.calls, [
+    ['unarchive', 'session-a'],
+    ['unpin', 'session-a'],
+  ])
+  await assert.rejects(fs.stat(cacheFile))
+  await assert.rejects(fs.stat(harness.store.objectDir(entry.trashId)))
+  assert.deepEqual(harness.store.entries(), [])
+  await harness.dispose()
+})
+
+test('purge all releases the projection records of every tree member', async () => {
+  const harness = await createHarness()
+  const project = path.join(harness.root, 'project')
+  await fs.mkdir(project)
+  await harness.addSession({ id: 'session-parent', cwd: project, title: 'Parent' })
+  await harness.addSession({
+    id: 'child-a',
+    cwd: project,
+    title: 'A',
+    origin: 'subagent',
+    parentSession: 'session-parent',
+  })
+  const workspace = harness.workspaces.add({ id: 'ws-1', path: project, sessionIds: ['session-parent'] })
+  const parentCache = await harness.writeCachedTitle('session-parent', 'Parent')
+  const childCache = await harness.writeCachedTitle('child-a', 'A')
+
+  await harness.service.trash('session-parent')
+  const result = await harness.service.purgeAll()
+
+  assert.equal(result.purged, 1)
+  assert.equal(result.failed, 0)
+  assert.deepEqual(workspace.sessionIds, [])
+  await assert.rejects(fs.stat(parentCache))
+  await assert.rejects(fs.stat(childCache))
+  await harness.dispose()
+})
+
+test('purge succeeds when workspace cleanup fails and still removes the cache record', async () => {
+  const harness = await createHarness()
+  const project = path.join(harness.root, 'project')
+  await fs.mkdir(project)
+  await harness.addSession({ id: 'session-a', cwd: project, title: 'A' })
+  const workspace = harness.workspaces.add({ id: 'ws-1', path: project, sessionIds: ['session-a'] })
+  workspace.detachSession = async () => {
+    throw new Error('detach failed')
+  }
+  const cacheFile = await harness.writeCachedTitle('session-a', 'A')
+  await harness.service.trash('session-a')
+
+  const result = await harness.service.purge('session-a')
+
+  assert.equal(result.sessionId, 'session-a')
+  assert.deepEqual(result.title, 'A')
+  await assert.rejects(fs.stat(cacheFile))
+  assert.deepEqual(harness.workspaces.calls, [
+    ['unarchive', 'session-a'],
+    ['unpin', 'session-a'],
+  ])
+  assert.ok(
+    harness.logger.lines.some(
+      (line) => line.level === 'warn' && String(line.args[0]).includes('detach failed'),
+    ),
+  )
+  assert.deepEqual(harness.store.entries(), [])
+  await harness.dispose()
+})
+
+test('startup projection sweep removes only old records no session can use', async () => {
+  const harness = await createHarness()
+  const old = new Date(Date.now() - 8 * 86_400_000)
+  const stale = await harness.writeCachedTitle('session-stale', 'Stale')
+  const recent = await harness.writeCachedTitle('session-recent', 'Recent')
+  await harness.addSession({ id: 'session-live', title: 'Live' })
+  const liveCache = await harness.writeCachedTitle('session-live', 'Live')
+  await harness.addSession({ id: 'session-trashed', title: 'Trashed' })
+  const trashedCache = await harness.writeCachedTitle('session-trashed', 'Trashed')
+  await harness.service.trash('session-trashed')
+
+  for (const file of [stale, liveCache, trashedCache]) await fs.utimes(file, old, old)
+
+  const result = await harness.service.sweepProjectionCache()
+
+  assert.deepEqual(result, { removed: 1 })
+  await assert.rejects(fs.stat(stale))
+  for (const file of [recent, liveCache, trashedCache]) {
+    assert.equal((await fs.stat(file)).isFile(), true)
+  }
+  await harness.dispose()
+})
+
+test('projection sweep tolerates a missing cache directory and skips non-files', async () => {
+  const harness = await createHarness()
+  assert.deepEqual(await harness.service.sweepProjectionCache(), { removed: 0 })
+
+  const directory = path.join(harness.root, 'storages', 'session_projcache', 'sessions')
+  await fs.mkdir(path.join(directory, 'session-directory.json'), { recursive: true })
+  const old = new Date(Date.now() - 8 * 86_400_000)
+  await fs.utimes(path.join(directory, 'session-directory.json'), old, old)
+
+  assert.deepEqual(await harness.service.sweepProjectionCache(), { removed: 0 })
+  assert.equal((await fs.stat(path.join(directory, 'session-directory.json'))).isDirectory(), true)
+  await harness.dispose()
+})
+
+test('recovery finishes an interrupted purge and releases its derived records', async () => {
+  const harness = await createHarness()
+  const project = path.join(harness.root, 'project')
+  await fs.mkdir(project)
+  await harness.addSession({ id: 'session-a', cwd: project, title: 'A' })
+  const workspace = harness.workspaces.add({ id: 'ws-1', path: project, sessionIds: ['session-a'] })
+  const cacheFile = await harness.writeCachedTitle('session-a', 'A')
+  const entry = await harness.service.trash('session-a')
+  await harness.store.commit([{ ...entry, state: 'purging' }])
+  await fs.rm(harness.store.objectDir(entry.trashId), { recursive: true, force: true })
+
+  await harness.service.recover()
+
+  assert.deepEqual(workspace.sessionIds, [])
+  await assert.rejects(fs.stat(cacheFile))
   assert.deepEqual(harness.store.entries(), [])
   await harness.dispose()
 })

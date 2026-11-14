@@ -367,6 +367,24 @@ test('POST /purge-all returns the bulk counts without reading a body', async () 
   assert.deepEqual(zeros.body, { ok: true, purged: 0, forgotten: 0, failed: 0 })
 })
 
+test('POST /purge and /purge-all report freed bytes when the service knows them', async () => {
+  const { call } = createApi({
+    purge: (sessionId) => ({ sessionId, freedBytes: 4096 }),
+    purgeAll: () => ({ purged: 2, forgotten: 0, failed: 0, freedBytes: 8192 }),
+  })
+
+  const purged = await call('purge', {
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ sessionId: 'session-a' }),
+  })
+  assert.equal(purged.status, 200)
+  assert.deepEqual(purged.body, { ok: true, sessionId: 'session-a', freedBytes: 4096 })
+
+  const purgedAll = await call('purge-all', { headers: JSON_HEADERS })
+  assert.equal(purgedAll.status, 200)
+  assert.deepEqual(purgedAll.body, { ok: true, purged: 2, forgotten: 0, failed: 0, freedBytes: 8192 })
+})
+
 test('POST /purge-all requires the CSRF header and never calls the service', async () => {
   const { call, calls } = createApi()
   const result = await call('purge-all', { headers: { host: '127.0.0.1:3080' } })

@@ -28,9 +28,10 @@ function entry(sessionId, cwd, extra = {}) {
 /**
  * @param {object[]} entries index entries.
  * @param {(cwd: string) => Promise<boolean>} probe workspace probe.
+ * @param {(entries: object[]) => Promise<object | null>} [storageSnapshot] storage measurement.
  * @returns {object} the state service.
  */
-function createService(entries, probe) {
+function createService(entries, probe, storageSnapshot) {
   const store = {
     entries: () => entries,
     describe: () => ({ status: 'ok', updatedAt: 1, error: null, unindexed: 0 }),
@@ -40,6 +41,7 @@ function createService(entries, probe) {
     config,
     trashRootDisplay: '$DSH_HOME/.session-trash',
     directoryExists: probe,
+    ...(storageSnapshot === undefined ? {} : { storageSnapshot }),
   })
 }
 
@@ -57,6 +59,21 @@ test('the state snapshot probes each distinct workspace once', async () => {
   assert.equal(snapshot.entries.length, 4)
   assert.equal(snapshot.entries[0].workspaceNowExists, true)
   assert.equal(snapshot.entries[3].workspaceNowExists, null)
+})
+
+test('the state snapshot carries storage stats and tolerates a failing measurement', async () => {
+  const entries = [entry('a', '/work/a')]
+  const measured = createService(entries, async () => true, async (described) => ({
+    totalBytes: 42,
+    described: described.length,
+  }))
+  const snapshot = await measured.snapshot()
+  assert.deepEqual(snapshot.storage, { totalBytes: 42, described: 1 })
+
+  const failing = createService(entries, async () => true, async () => {
+    throw new Error('measurement failed')
+  })
+  assert.equal((await failing.snapshot()).storage, null)
 })
 
 test('lastErrorCode classifies recorded failure families', () => {

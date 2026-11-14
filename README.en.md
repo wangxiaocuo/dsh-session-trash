@@ -20,7 +20,7 @@ A sidebar collects sessions you talked to once. Deleting them feels wasteful, an
 
 This plugin adds a trash to DSH. Right-click a cold session to move it out of the sidebar; its log stays on disk. The Trash page in Settings lists those sessions, restores them within the retention window, and deletes the logs automatically when the window ends. If you are sure you no longer need one, delete it permanently.
 
-Moving and restoring only touch the session directory. Attachments, images, the projection cache, and the search index are left alone. The index is committed atomically, so a process that dies mid-operation finishes or rolls back on the next startup.
+Moving and restoring only touch the session directory; attachments and images stay where they are. Permanent deletion also removes the session's projection-cache record and workspace accounting, while attachments and images are kept. The index is committed atomically, so a process that dies mid-operation finishes or rolls back on the next startup.
 
 <p align="center">
   <img src="assets/trash-page.png" width="860" alt="The Trash page in DSH Settings, showing the session list, filters, search, and cleanup actions">
@@ -41,7 +41,8 @@ Moving and restoring only touch the session directory. Attachments, images, the 
 
 Settings, then Trash.
 
-- Each row shows the conversation title, Session ID, original workspace, trashed date, remaining days, size, and status. The title is folded from the session log; entries written by earlier releases that stored the workspace name as the title are repaired from DSH's session-projection cache at startup.
+- Each row shows the conversation title, Session ID, original workspace, trashed date, remaining days, log size, and status. The row's "Log" figure covers session logs only, never attachments or images. The title is folded from the session log; entries written by earlier releases that stored the workspace name as the title are repaired from DSH's session-projection cache at startup.
+- A line below the toolbar shows this device's session data: logs, attachments, and cache by category, plus the projection-cache bytes the startup sweep can reclaim. Attachments are reported as a total; the page does not guess which objects are unreferenced.
 - Search, filters, and sorting by trashed date / title / size / expiry, with 50 rows per page.
 - An entry with hidden children shows a "N child sessions" badge and expands to list each member with its title, Session ID, and size. Restore and permanent deletion cover the whole tree; there is no partial restore.
 - Row actions are restore, restore as orphan, permanent deletion, removal from the index, copying the Session ID, and revealing the original workspace in Finder or Explorer.
@@ -172,6 +173,8 @@ Defaults apply when `config` is omitted. Invalid values reject activation instea
 
 The index is committed atomically with `tmp`, `fsync`, and `rename`, and the previous commit is kept as `.bak`. On activation and before every sweep, the plugin settles unfinished `trashing`, `restoring`, and `purging` entries. It completes what can be completed, rolls back what can be rolled back, marks uncertain cases as `missing`, and never deletes a session log during that recovery pass.
 
+After a permanent deletion succeeds, the plugin removes `<DSH_HOME>/storages/session_projcache/sessions/<sessionId>.json` and drops the session from the workspace registry, including its archive and pin markers. Startup also sweeps projection-cache records older than seven days that no session can use. These cleanups are best-effort: a failure is logged, never rolls back a completed log deletion, and never blocks another entry.
+
 A same-filesystem move uses `rename`. A cross-filesystem move copies into a temporary directory, verifies regular-file count and byte count, publishes with `rename`, then removes the source. Any failure cleans up the temporary directory and keeps the source. Symlinks are copied as symlinks, not followed.
 
 On POSIX filesystems, the trash root uses `0700` permissions and the index and metadata files use `0600`. A lock older than 10 minutes is treated as stale.
@@ -184,13 +187,13 @@ All routes live under `/plugins/dsh-session-trash/api/` and are registered as ex
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/state` | Config, index state, entries, stats, and cleanup diagnostics (read-only; never sweeps) |
+| `GET` | `/state` | Config, index state, entries, stats, a storage breakdown, and cleanup diagnostics (read-only; never sweeps) |
 | `POST` | `/sweep` | No body; runs one throttled page-open maintenance sweep; whether expired entries are deleted depends on `enableAutoCleanup` |
 | `POST` | `/preflight` | `{ sessionId }` returns `{ eligible: true, descendants }` or `{ eligible: false, code, message, details? }`; `descendants` is the number of hidden children that move along |
 | `POST` | `/trash` | `{ sessionId }`; moves the whole session tree (parent plus hidden subagent children) and returns `{ ok, entry }` |
 | `POST` | `/restore` | `{ sessionId, mode: 'normal' \| 'orphan' }` |
-| `POST` | `/purge` | `{ sessionId }`; permanently deletes the session log |
-| `POST` | `/purge-all` | No body; permanently deletes every entry in the trash, dropping `missing` index records only; returns `{ ok, purged, forgotten, failed }` |
+| `POST` | `/purge` | `{ sessionId }`; permanently deletes the session log, its projection-cache record, and its workspace accounting; the response carries `freedBytes` |
+| `POST` | `/purge-all` | No body; permanently deletes every entry in the trash, dropping `missing` index records only; returns `{ ok, purged, forgotten, failed, freedBytes }` |
 | `POST` | `/forget` | `{ sessionId }`; removes only a `missing` index entry |
 | `POST` | `/orphans/forget` | No body; removes empty unindexed object directories that hold no session log; returns `{ ok, removed }` |
 | `POST` | `/reveal` | `{ sessionId }`; opens the original workspace |
@@ -205,6 +208,8 @@ Restore and maintenance refusals include `TRASH_ENTRY_NOT_FOUND`, `TRASH_STATE_I
 
 `/state.stats.cleanup` reports the last cleanup attempt, the next sweep, a pending retry, consecutive failures, and the last run summary.
 
+`/state.storage` breaks down this device's session data: `sessionLogs` (stored session logs), `trashLogs` (trashed logs), `attachments` (durable attachment objects), `attachmentCache` (regenerable request cache), `projectionCache` (record count and `sweepableBytes`), and `totalBytes`. Attachments are a total only: finding which objects are unreferenced requires scanning every log, which belongs to the later reclamation feature; this release does not guess that number.
+
 `/state` entries gain `subagentCount` (hidden children moved along) and `members` (parent first, each with `sessionId`, `origin`, and `sizeBytes`); `sizeBytes`/`fileCount` cover the whole tree. The `entry` returned by `/trash` uses the same shape. Entries also carry `lastErrorCode` (a stable category the page localizes) and `lastError` (the raw English diagnostic, used only as a tooltip).
 
 ## Limitations
@@ -214,9 +219,9 @@ Restore and maintenance refusals include `TRASH_ENTRY_NOT_FOUND`, `TRASH_STATE_I
 - A trashed tree is restored or deleted as a whole; there is no partial restore. If any member directory is missing, the entry is marked `missing` and can only be purged or forgotten.
 - Orphan restore never recreates the original workspace directory and never reattaches the session to a workspace.
 - Archive and pin state survive trash and restore. The Trash page does not manage either set.
-- Permanent deletion removes the session log only. Attachments, images, projection-cache rows, and search-index rows are not deleted.
+- Permanent deletion removes the session log, its projection-cache record, and its workspace accounting (including archive and pin markers); a cleanup failure is logged and never rolls back an already-completed log deletion. Attachments and images are not deleted; the search index is derived data and DSH drops the deleted session on its next search.
 - Unindexed objects (object directories whose `meta.json` is damaged or unreadable) are never deleted automatically; the page can only clean empty leftovers that hold no session log, and anything that may contain logs is left for manual inspection.
-- `/state` returns all entry summaries in one response. Search, filtering, and paging happen in the Client.
+- `/state` returns all entry summaries and the storage breakdown in one response. Search, filtering, and paging happen in the Client.
 - Same-origin tabs in the same browser sync index changes through `BroadcastChannel`; different browsers or machines still need a refresh.
 - Batch restore only covers rows whose workspace still exists; entries with a missing workspace need an individual orphan restore.
 - The desktop apps on Windows and Linux have not been verified manually; CI boots an npm-installed `dsh web` Host, so desktop-shell UI and desktop-only features (such as reveal in the file manager) are still verified on macOS only. On Windows, cases that rely on POSIX permission bits are skipped, and long paths over 260 characters / symlink copying depend on system configuration (the related tests skip themselves when unsupported).
@@ -235,7 +240,11 @@ No. The session directory moves under `<DSH_HOME>/.session-trash/objects/` and s
 
 ### Does permanent deletion remove attachments and images
 
-No. The plugin deletes the session log only; attachments, images, the projection cache, and the search index stay where they are.
+No. Attachments and images are content-addressed and may be shared by several sessions, so the plugin never deletes them per session. Permanent deletion removes the session log, its projection-cache record, and its workspace accounting; the search index drops the session on its next search. Global attachment reclamation is outside this release.
+
+### Why is the trash total smaller than disk usage
+
+The toolbar's "Logs" figure counts only trashed session logs. Attachments, images, the projection cache, and the regenerable cache appear in the device-wide "Session data" line. Attachments are content-addressed and may be shared by several sessions, so the plugin never attributes a shared object's bytes to one row.
 
 ### Where does a restored session go
 

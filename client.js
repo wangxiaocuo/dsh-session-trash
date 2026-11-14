@@ -140,7 +140,11 @@ window.__ModuleLoader__.load({
       cleaning: '正在清理…',
       statsCountOne: '{count} 个会话',
       statsCountOther: '{count} 个会话',
-      statsSize: '占用 {size}',
+      statsSize: '日志 {size}',
+      logSize: '日志 {size}',
+      logSizeHint: '仅会话日志，不含附件和图片',
+      storageSummary: '本机会话数据 {total}：日志 {logs} · 附件 {attachments} · 缓存 {cache}',
+      storageSweepable: '可清扫 {size}',
       searchLabel: '搜索回收站',
       searchPlaceholder: '搜索标题、Session ID 或原始工作区',
       searchClear: '清除搜索',
@@ -234,17 +238,20 @@ window.__ModuleLoader__.load({
       orphanBody: '「{path}」已不存在。恢复为孤儿会话后，会话会出现在「未分组」，不会自动创建目录。',
       orphanConfirm: '恢复为孤儿会话',
       purgeTitle: '永久删除「{title}」的会话日志？',
-      purgeBody: '此操作不可撤销。附件、图片和搜索索引等衍生物不会被删除。',
+      purgeBody: '此操作不可撤销。会话日志和投影缓存会一并删除；附件和图片会保留，搜索索引会在下次搜索时自动剔除该会话。',
       purgeConfirm: '永久删除',
       purgeAll: '永久删除全部',
       purgingAll: '正在删除…',
       purgeAllTitle: '永久删除回收站中的全部 {count} 个会话？',
-      purgeAllBody: '此操作不可撤销。附件、图片和搜索索引等衍生物不会被删除。',
+      purgeAllBody: '此操作不可撤销。会话日志和投影缓存会一并删除；附件和图片会保留，搜索索引会在下次搜索时自动剔除这些会话。',
       purgeAllConfirm: '全部永久删除',
-      purgeAllDoneOne: '已永久删除 {count} 个会话',
-      purgeAllDoneOther: '已永久删除 {count} 个会话',
+      purgeAllDoneOne: '已永久删除 {count} 个会话，释放 {size}',
+      purgeAllDoneOther: '已永久删除 {count} 个会话，释放 {size}',
+      purgeAllDonePlainOne: '已永久删除 {count} 个会话',
+      purgeAllDonePlainOther: '已永久删除 {count} 个会话',
       purgeAllNone: '回收站中没有可删除的会话',
-      purgeAllPartial: '批量删除完成：成功 {removed} 个，失败 {failed} 个。',
+      purgeAllPartial: '批量删除完成：成功 {removed} 个，失败 {failed} 个，释放 {size}。',
+      purgeAllPartialPlain: '批量删除完成：成功 {removed} 个，失败 {failed} 个。',
       forgetTitle: '从回收站列表移除这条缺失记录？',
       forgetBody: '不会删除任何文件；仅移除索引中的这条记录。',
       forgetConfirm: '从索引移除',
@@ -287,7 +294,8 @@ window.__ModuleLoader__.load({
       blockedDescendantsToast: '该会话包含可见的子会话，只能使用 DSH 自带的「归档」整棵会话树。',
       restoreSuccess: '已恢复「{title}」',
       restoreOrphanSuccess: '已恢复为孤儿会话「{title}」',
-      purgeSuccess: '已永久删除「{title}」',
+      purgeSuccess: '已永久删除「{title}」，释放 {size}',
+      purgeSuccessUnknown: '已永久删除「{title}」',
       forgetSuccess: '已从回收站列表移除',
       errorLive: '这个会话正在使用中，无法移入回收站。',
       errorActive: '这个会话还有正在运行的任务，无法移入回收站。',
@@ -321,7 +329,11 @@ window.__ModuleLoader__.load({
       cleaning: 'Cleaning…',
       statsCountOne: '{count} session',
       statsCountOther: '{count} sessions',
-      statsSize: '{size} used',
+      statsSize: 'Logs {size}',
+      logSize: 'Log {size}',
+      logSizeHint: 'Session logs only; attachments and images are not included.',
+      storageSummary: 'Session data on this device: {total} — logs {logs} · attachments {attachments} · cache {cache}',
+      storageSweepable: '{size} sweepable',
       searchLabel: 'Search the trash',
       searchPlaceholder: 'Search title, Session ID, or original workspace',
       searchClear: 'Clear search',
@@ -415,17 +427,20 @@ window.__ModuleLoader__.load({
       orphanBody: '“{path}” no longer exists. An orphan restore puts the session back under “Ungrouped” and never recreates the directory.',
       orphanConfirm: 'Restore as orphan',
       purgeTitle: 'Permanently delete the session log for “{title}”?',
-      purgeBody: 'This cannot be undone. Attachments, images, and search index rows are not deleted.',
+      purgeBody: 'This cannot be undone. The session log and its projection-cache record are deleted; attachments and images are kept, and the search index drops the session on its next search.',
       purgeConfirm: 'Delete permanently',
       purgeAll: 'Delete all permanently',
       purgingAll: 'Deleting…',
       purgeAllTitle: 'Permanently delete all {count} sessions in the trash?',
-      purgeAllBody: 'This cannot be undone. Attachments, images, and search index rows are not deleted.',
+      purgeAllBody: 'This cannot be undone. The session logs and their projection-cache records are deleted; attachments and images are kept, and the search index drops these sessions on its next search.',
       purgeAllConfirm: 'Delete all permanently',
-      purgeAllDoneOne: 'Permanently deleted {count} session',
-      purgeAllDoneOther: 'Permanently deleted {count} sessions',
+      purgeAllDoneOne: 'Permanently deleted {count} session, freeing {size}',
+      purgeAllDoneOther: 'Permanently deleted {count} sessions, freeing {size}',
+      purgeAllDonePlainOne: 'Permanently deleted {count} session',
+      purgeAllDonePlainOther: 'Permanently deleted {count} sessions',
       purgeAllNone: 'No sessions to delete',
-      purgeAllPartial: 'Bulk delete finished: {removed} removed, {failed} failed.',
+      purgeAllPartial: 'Bulk delete finished: {removed} removed, {failed} failed, {size} freed.',
+      purgeAllPartialPlain: 'Bulk delete finished: {removed} removed, {failed} failed.',
       forgetTitle: 'Remove this missing record from the trash list?',
       forgetBody: 'No file is deleted; only this index record is removed.',
       forgetConfirm: 'Remove from index',
@@ -468,7 +483,8 @@ window.__ModuleLoader__.load({
       blockedDescendantsToast: 'This session has visible child sessions; use the built-in Archive action for the whole tree instead.',
       restoreSuccess: 'Restored “{title}”',
       restoreOrphanSuccess: 'Restored “{title}” as an orphan session',
-      purgeSuccess: 'Permanently deleted “{title}”',
+      purgeSuccess: 'Permanently deleted “{title}” and freed {size}',
+      purgeSuccessUnknown: 'Permanently deleted “{title}”',
       forgetSuccess: 'Removed from the trash list',
       errorLive: 'This session is in use and cannot be moved to the trash.',
       errorActive: 'This session still has running work.',
@@ -899,6 +915,7 @@ window.__ModuleLoader__.load({
       .dsh-trash__title { margin: 0; font-size: 20px; font-weight: 600; line-height: 1.3; }
       .dsh-trash__subtitle { margin: 0; font-size: 13px; line-height: 1.5; color: var(--dsw-alias-label-secondary); }
       .dsh-trash__toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 12px; }
+      .dsh-trash__storage { font-size: 12.5px; line-height: 1.5; color: var(--dsw-alias-label-secondary); opacity: 0.9; }
       .dsh-trash__stats { font-size: 13px; color: var(--dsw-alias-label-secondary); display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
       .dsh-trash__dot { opacity: 0.5; }
       .dsh-trash__toolbarActions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
@@ -1905,7 +1922,15 @@ window.__ModuleLoader__.load({
               return
             }
             clearRowError(entry.sessionId)
-            const message = format(t('purgeSuccess'), { title: entry.title })
+            const payload = outcome.payload
+            const freedBytes =
+              payload !== null && payload !== undefined && typeof payload.freedBytes === 'number'
+                ? payload.freedBytes
+                : null
+            const message =
+              freedBytes === null || freedBytes <= 0
+                ? format(t('purgeSuccessUnknown'), { title: entry.title })
+                : format(t('purgeSuccess'), { title: entry.title, size: formatBytes(freedBytes) })
             bumpRevision()
             ctx.contextMenus.notify(message, true)
             announce(message)
@@ -2039,12 +2064,27 @@ window.__ModuleLoader__.load({
               payload !== null && payload !== undefined && typeof payload.forgotten === 'number' ? payload.forgotten : 0
             const failed = payload !== null && payload !== undefined && typeof payload.failed === 'number' ? payload.failed : 0
             const removed = purged + forgotten
-            const message =
-              failed > 0
-                ? format(t('purgeAllPartial'), { removed, failed })
-                : removed > 0
-                  ? countText(t, 'purgeAllDone', removed)
-                  : t('purgeAllNone')
+            const freedBytes =
+              payload !== null && payload !== undefined && typeof payload.freedBytes === 'number'
+                ? payload.freedBytes
+                : null
+            const size = formatBytes(freedBytes)
+            const knownSize = typeof freedBytes === 'number' && freedBytes > 0
+            let message
+            if (failed > 0) {
+              message = knownSize
+                ? format(t('purgeAllPartial'), { removed, failed, size })
+                : format(t('purgeAllPartialPlain'), { removed, failed })
+            } else if (removed > 0) {
+              message = countText(
+                t,
+                knownSize ? 'purgeAllDone' : 'purgeAllDonePlain',
+                removed,
+                knownSize ? { size } : {},
+              )
+            } else {
+              message = t('purgeAllNone')
+            }
             bumpRevision()
             ctx.contextMenus.notify(message, failed === 0)
             announce(message)
@@ -2405,6 +2445,32 @@ window.__ModuleLoader__.load({
                 ),
               )
 
+        const storage =
+          data !== null && data !== undefined && data.storage !== null && typeof data.storage === 'object'
+            ? data.storage
+            : null
+        const storageLine =
+          storage === null || !(Number(storage.totalBytes) > 0)
+            ? null
+            : h(
+                'div',
+                { className: 'dsh-trash__storage', key: 'storage' },
+                format(t('storageSummary'), {
+                  total: formatBytes(storage.totalBytes),
+                  logs: formatBytes(
+                    (Number(storage.sessionLogs?.bytes) || 0) + (Number(storage.trashLogs?.bytes) || 0),
+                  ),
+                  attachments: formatBytes(storage.attachments?.bytes),
+                  cache: formatBytes(
+                    (Number(storage.attachmentCache?.bytes) || 0) +
+                      (Number(storage.projectionCache?.bytes) || 0),
+                  ),
+                }),
+                Number(storage.projectionCache?.sweepableBytes) > 0
+                  ? ` · ${format(t('storageSweepable'), { size: formatBytes(storage.projectionCache.sweepableBytes) })}`
+                  : null,
+              )
+
         const controls =
           entries.length === 0
             ? null
@@ -2650,7 +2716,7 @@ window.__ModuleLoader__.load({
                     h('span', { className: 'dsh-trash__dot', 'aria-hidden': true }, '·'),
                     h('span', null, retentionText(entry)),
                     h('span', { className: 'dsh-trash__dot', 'aria-hidden': true }, '·'),
-                    h('span', null, formatBytes(entry.sizeBytes)),
+                    h('span', { title: t('logSizeHint') }, format(t('logSize'), { size: formatBytes(entry.sizeBytes) })),
                   ),
                   entry.subagentCount > 0
                     ? h(
@@ -2818,6 +2884,7 @@ window.__ModuleLoader__.load({
           header,
           banners,
           toolbar,
+          storageLine,
           controls,
           batchBar,
           panel,

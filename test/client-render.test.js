@@ -578,6 +578,36 @@ test('the trash page renders rows, badges, and row actions from /state', async (
   assert.equal(menus[0].props.label, '「Alpha」的更多操作')
 })
 
+test('the page shows the storage breakdown and labels row bytes as session logs', async () => {
+  const { factory, mini } = await loadModule()
+  const payload = statePayload()
+  payload.storage = {
+    measuredAt: Date.now(),
+    totalBytes: 9.5 * 1024 * 1024,
+    sessionLogs: { count: 3, bytes: 2 * 1024 * 1024 },
+    trashLogs: { count: 1, bytes: 2048 },
+    attachments: { files: 4, bytes: 6 * 1024 * 1024 },
+    attachmentCache: { files: 2, bytes: 1024 * 1024 },
+    projectionCache: {
+      records: 3,
+      bytes: 512 * 1024,
+      sweepableRecords: 1,
+      sweepableBytes: 256 * 1024,
+    },
+  }
+  const client = createClient(factory, mini, payload)
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+
+  const storage = elementByClass(tree, 'dsh-trash__storage')
+  assert.ok(storage !== undefined)
+  const storageText = textContent(storage)
+  assert.ok(storageText.includes('本机会话数据'))
+  assert.ok(storageText.includes('附件 6 MB'))
+  assert.ok(storageText.includes('可清扫 256 KB'))
+  assert.ok(textOf(tree).some((value) => value.includes('日志 2 KB')))
+})
+
 test('a row shows the recorded workspace title and keeps the full path as the tooltip', async () => {
   const { factory, mini } = await loadModule()
   const now = Date.now()
@@ -832,6 +862,34 @@ test('the delete-all toolbar button asks for confirmation before purging the tra
   assert.equal(call.options.body, undefined)
   assert.equal(client.toasts.at(-1).text, '已永久删除 1 个会话')
   assert.equal(client.toasts.at(-1).success, true)
+})
+
+test('purging reports the freed log bytes when the host provides them', async () => {
+  const { factory, mini } = await loadModule()
+  const client = createClient(factory, mini, statePayload(), {
+    [PURGE_ROUTE]: { body: { ok: true, sessionId: 'session-alpha', freedBytes: 2048 } },
+  })
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+  actionMenus(tree)[0].props.items.find((item) => item.key === 'purge').onSelect()
+  const afterSelect = await mini.settle(section.component)
+  dialogOfKind(afterSelect, 'purge').props.onConfirm()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(client.toasts.at(-1).text, '已永久删除「Alpha」，释放 2 KB')
+})
+
+test('delete-all reports the freed bytes when the host provides them', async () => {
+  const { factory, mini } = await loadModule()
+  const client = createClient(factory, mini, statePayload(), {
+    [PURGE_ALL_ROUTE]: { body: { ok: true, purged: 1, forgotten: 0, failed: 0, freedBytes: 2048 } },
+  })
+  const section = client.slots.find((entry) => entry.definition.name === 'settings.section')
+  const tree = await mini.settle(section.component)
+  buttonByText(tree, '永久删除全部').props.onClick()
+  const afterClick = await mini.settle(section.component)
+  dialogOfKind(afterClick, 'purgeAll').props.onConfirm()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(client.toasts.at(-1).text, '已永久删除 1 个会话，释放 2 KB')
 })
 
 test('a partially failed delete-all reports both the removed and failed counts', async () => {

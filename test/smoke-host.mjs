@@ -234,6 +234,9 @@ async function main() {
     assert.equal(state.body.version, 1)
     assert.equal(state.body.trashRootDisplay, '$DSH_HOME/.session-trash')
     assert.deepEqual(state.body.entries, [])
+    assert.equal(typeof state.body.storage, 'object')
+    assert.equal(typeof state.body.storage.totalBytes, 'number')
+    assert.equal(typeof state.body.storage.attachments.files, 'number')
 
     const jsonHeaders = {
       host: '127.0.0.1:3080',
@@ -290,7 +293,10 @@ async function main() {
       body: JSON.stringify({ sessionId }),
     })
     assert.equal(purged.status, 200)
-    assert.deepEqual(purged.body, { ok: true, sessionId })
+    assert.equal(purged.body.ok, true)
+    assert.equal(purged.body.sessionId, sessionId)
+    assert.equal(typeof purged.body.freedBytes, 'number')
+    assert.ok(purged.body.freedBytes > 0)
     await assert.rejects(fs.stat(sessionDir))
     const afterPurge = JSON.parse(
       await fs.readFile(path.join(prepared.home, '.session-trash', 'trash-index.json'), 'utf8'),

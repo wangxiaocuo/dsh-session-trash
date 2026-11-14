@@ -248,6 +248,35 @@ async function writeSession(home, sessionId, cwd, extra = {}) {
 }
 
 /**
+ * Write one durable session-projection-cache record for a cold session.
+ *
+ * @param {string} home throwaway DSH home.
+ * @param {string} sessionId session identity.
+ * @param {string} title cached conversation title.
+ * @param {string} cwd session working directory.
+ * @returns {Promise<string>} the written cache file.
+ */
+async function writeProjectionCache(home, sessionId, title, cwd) {
+  const directory = path.join(home, 'storages', 'session_projcache', 'sessions')
+  await fs.mkdir(directory, { recursive: true })
+  const file = path.join(directory, `${sessionId}.json`)
+  const document = {
+    version: 7,
+    record: {
+      identity: {
+        formatVersion: 4,
+        createdAt: Date.now() - 60_000,
+        cwd,
+        isSeeded: false,
+      },
+      rows: { title: { ver: 1, seq: 0, val: title } },
+    },
+  }
+  await fs.writeFile(file, `${JSON.stringify(document, null, 2)}\n`)
+  return file
+}
+
+/**
  * Write a durable workspace registry with an explicit session order per row.
  *
  * @param {string} home throwaway DSH home.
@@ -589,12 +618,14 @@ try {
   await writeSession(home, rebuildId, rebuildProject)
   await writeSession(home, cleanupId, cleanupProject)
   await writeSession(home, purgeId, purgeProject)
+  const purgeCache = await writeProjectionCache(home, purgeId, 'A conversation queued for permanent deletion', purgeProject)
   for (const id of bulkIds) await writeSession(home, id, purgeAllProject)
   await writeWorkspaces(home, [
     { id: 'ws-alpha', path: alphaProject, sessionIds: [alphaId] },
     { id: 'ws-beta', path: betaProject, sessionIds: [betaId] },
     { id: 'ws-order', path: orderProject, sessionIds: orderIds },
     { id: 'ws-rebuild', path: rebuildProject, sessionIds: [rebuildId] },
+    { id: 'ws-purge', path: purgeProject, sessionIds: [purgeId] },
   ])
 
   server = await startServer(home)
@@ -608,6 +639,10 @@ try {
   assert.ok(initial.body.trashRootDisplay.endsWith('/.session-trash'))
   assert.equal(initial.body.entries.length, 0)
   assert.equal(typeof initial.body.stats.cleanup, 'object')
+  assert.equal(initial.body.storage.projectionCache.records, 1)
+  assert.equal(initial.body.storage.trashLogs.count, 0)
+  assert.equal(typeof initial.body.storage.sessionLogs.bytes, 'number')
+  assert.equal(initial.body.storage.attachments.files, 0)
   const bootResponse = await fetch(`${api.base}/`, {
     headers: { cookie: api.cookie },
     signal: AbortSignal.timeout(15_000),
@@ -864,10 +899,15 @@ try {
   const purgeEntry = await findEntry(home, purgeId)
   const purged = await api.call('purge', { method: 'POST', body: { sessionId: purgeId } })
   assert.equal(purged.status, 200)
+  assert.equal(purged.body.freedBytes, purgeEntry.sizeBytes)
   await assert.rejects(fs.stat(path.join(home, '.session-trash', 'objects', purgeEntry.trashId)))
   const afterPurge = await api.call('state')
   assert.equal(afterPurge.body.entries.some((entry) => entry.sessionId === purgeId), false)
-  pass('permanent purge removes the object and index entry')
+  assert.equal(afterPurge.body.storage.projectionCache.records, 0)
+  const afterPurgeWorkspaces = await readWorkspaces(home)
+  assert.deepEqual(afterPurgeWorkspaces.tables.workspaces['ws-purge'].sessionIds, [])
+  await assert.rejects(fs.stat(purgeCache))
+  pass('permanent purge removes the object, index entry, projection cache, and workspace accounting')
 
   // --- Delete all permanently --------------------------------------------
   const bulkEntries = []
@@ -889,7 +929,13 @@ try {
   assert.equal(beforeBulk.body.entries.find((entry) => entry.sessionId === bulkIds[2]).state, 'missing')
   const bulkPurged = await api.call('purge-all', { method: 'POST' })
   assert.equal(bulkPurged.status, 200)
-  assert.deepEqual(bulkPurged.body, { ok: true, purged: 2, forgotten: 1, failed: 0 })
+  assert.deepEqual(bulkPurged.body, {
+    ok: true,
+    purged: 2,
+    forgotten: 1,
+    failed: 0,
+    freedBytes: bulkEntries[0].sizeBytes + bulkEntries[1].sizeBytes,
+  })
   for (const entry of bulkEntries) {
     await assert.rejects(fs.stat(path.join(home, '.session-trash', 'objects', entry.trashId)))
   }
@@ -897,7 +943,7 @@ try {
   assert.equal(emptiedState.body.entries.length, 0)
   const emptyBulkPurge = await api.call('purge-all', { method: 'POST' })
   assert.equal(emptyBulkPurge.status, 200)
-  assert.deepEqual(emptyBulkPurge.body, { ok: true, purged: 0, forgotten: 0, failed: 0 })
+  assert.deepEqual(emptyBulkPurge.body, { ok: true, purged: 0, forgotten: 0, failed: 0, freedBytes: 0 })
   pass('delete-all permanently empties the trash and forgets missing entries')
 
   // --- 30-day expiry ------------------------------------------------------

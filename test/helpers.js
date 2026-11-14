@@ -172,8 +172,10 @@ export function createFakePersistence(sessionsRoot) {
  */
 export function createFakeWorkspaceRegistry() {
   const items = []
+  const registryCalls = []
   const registry = {
     items,
+    calls: registryCalls,
     /**
      * @param {{ id: string, path: string, title?: string, sessionIds?: string[] }} input workspace.
      * @returns {object} the fake workspace.
@@ -215,6 +217,20 @@ export function createFakeWorkspaceRegistry() {
      */
     list() {
       return items
+    },
+    /**
+     * @param {string} sessionId session to drop from the archive set.
+     * @returns {Promise<void>} resolution after the fake write.
+     */
+    async unarchiveSession(sessionId) {
+      registryCalls.push(['unarchive', sessionId])
+    },
+    /**
+     * @param {string} sessionId session to drop from the pin set.
+     * @returns {Promise<void>} resolution after the fake write.
+     */
+    async unpinSession(sessionId) {
+      registryCalls.push(['unpin', sessionId])
     },
   }
   return registry

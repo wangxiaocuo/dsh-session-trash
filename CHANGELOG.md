@@ -2,7 +2,23 @@
 
 本文件记录这个插件的所有重要变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.7.0] - 2026-11-14
+
+### Added
+
+- 永久删除会话时同时清理 DSH 的投影缓存记录，并解除工作区记账（含归档、置顶标记）。这些清理是尽力而为的：失败只写诊断日志，不会让已经完成的日志删除回滚。
+- 插件启动时清扫超过 7 天、没有对应会话的投影缓存记录，补上旧版本永久删除留下的残留。
+- `/state` 增加 `storage` 存储分解：已存会话日志、回收站日志、附件、可再生附件缓存、投影缓存和合计；投影缓存额外给出启动清扫可回收的字节数。
+- 回收站页面在工具栏下方显示本机会话数据，行内「大小」改为「日志」并标注不含附件；`/purge` 和 `/purge-all` 响应带 `freedBytes`，成功 Toast 显示本次释放的字节数。
+
+### Changed
+
+- 永久删除确认框改为说明真实范围：会话日志和投影缓存会删除，附件和图片会保留，搜索索引会在下次搜索时自动剔除该会话。
+- README 的「限制」「常见问题」和 API 表改为同一口径，并说明附件是内容寻址、可能跨会话共享，因此插件不做按会话删除；新增「为什么回收站合计比磁盘占用小」的说明。
+
+### Tests
+
+- 覆盖 purge / purge-all / 崩溃恢复的投影缓存与工作区清理、清理失败降级、启动期投影缓存清扫的保留条件，以及存储分解、`freedBytes` 和页面存储摘要的渲染。
 
 ## [0.6.9] - 2026-11-14
 
@@ -152,6 +168,7 @@
 
 - 回收站工具栏的「永久删除全部」与二次确认；`missing` 记录只移出索引，不删除会话文件。
 
+[0.7.0]: https://github.com/wangxiaocuo/dsh-session-trash/compare/v0.6.9...v0.7.0
 [0.6.9]: https://github.com/wangxiaocuo/dsh-session-trash/compare/v0.6.8...v0.6.9
 [0.6.8]: https://github.com/wangxiaocuo/dsh-session-trash/compare/v0.6.7...v0.6.8
 [0.6.7]: https://github.com/wangxiaocuo/dsh-session-trash/compare/v0.6.6...v0.6.7
