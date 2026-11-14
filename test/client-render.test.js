@@ -488,7 +488,7 @@ function createClient(factory, mini, payload, extra = {}) {
   const toasts = []
   const calls = []
   globalThis.fetch = async (url, options = {}) => {
-    const pathname = new URL(String(url)).pathname
+    const pathname = new URL(String(url), globalThis.window.location.origin).pathname
     calls.push({ pathname, options })
     let answer
     if (pathname === STATE_ROUTE) answer = typeof payload === 'function' ? payload(calls.length) : { status: 200, body: payload }

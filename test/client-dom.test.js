@@ -96,7 +96,7 @@ async function mount({ payload = statePayload(), routes = {} } = {}) {
 
   const calls = []
   globalThis.fetch = async (url, options = {}) => {
-    const pathname = new URL(String(url)).pathname
+    const pathname = new URL(String(url), window.location.href).pathname
     calls.push({ pathname, options })
     let answer
     if (pathname === STATE_ROUTE) {

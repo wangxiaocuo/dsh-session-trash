@@ -116,7 +116,7 @@ function createClient() {
 function stubFetch(routes) {
   const calls = []
   globalThis.fetch = async (url, options = {}) => {
-    const pathname = new URL(String(url)).pathname
+    const pathname = new URL(String(url), globalThis.window.location.origin).pathname
     const route = routes[pathname]
     calls.push({ url: String(url), options })
     if (route === undefined) {

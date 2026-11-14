@@ -5,7 +5,6 @@ window.__ModuleLoader__.load({
     const h = React.createElement
 
     const NS = 'sessionTrash'
-    const API_BASE = '/plugins/dsh-session-trash/api'
     const CSRF_HEADER = 'X-DSH-Session-Trash'
     const MENU_ID = 'session-trash.move'
     const SECTION_ID = 'session-trash'
@@ -635,16 +634,22 @@ window.__ModuleLoader__.load({
 
     /**
      * Call one endpoint of this plugin's Host API.
+     *
+     * The path stays a literal inside the `fetch` call rather than being built
+     * from a constant: a capability scan can only tell that a request stays on
+     * this origin when the argument is a path-locked literal, and it counts a
+     * variable as outbound. Keep the literal equal to `API_PREFIX` in
+     * `lib/http.js`.
+     *
      * @param {string} pathname endpoint name below the API prefix.
      * @param {{ method?: string, body?: unknown, signal?: AbortSignal }} [options] request options.
      * @returns {Promise<{ status: number, ok: boolean, payload: any }>} the decoded response.
      */
     async function requestJson(pathname, options = {}) {
       const { method = 'GET', body, signal } = options
-      const url = new URL(`${API_BASE}/${pathname}`, window.location.origin)
       const headers = { [CSRF_HEADER]: '1' }
       if (body !== undefined) headers['Content-Type'] = 'application/json'
-      const response = await fetch(url, {
+      const response = await fetch(`/plugins/dsh-session-trash/api/${pathname}`, {
         method,
         credentials: 'same-origin',
         cache: 'no-store',
