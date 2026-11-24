@@ -3642,17 +3642,21 @@ window.__ModuleLoader__.load({
                 const verdict = await preflight(sessionId, signal)
                 if (verdict === null) return []
                 if (verdict.eligible !== true) {
-                  const blocked = typeof verdict.code === 'string' ? MOVE_BLOCKED_KEYS[verdict.code] : undefined
-                  if (blocked === undefined) return []
-                  return [
-                    {
-                      id: 'move-refused',
-                      label: t(blocked.label),
-                      icon: { key: MENU_ID },
-                      separatorBefore: true,
-                      run: () => ctx.contextMenus.notify(t(blocked.toast), false),
-                    },
-                  ]
+                  const code = typeof verdict.code === 'string' ? verdict.code : ''
+                  // Patched: allow idle/live sessions to be trashed; server quiesces like purger.
+                  if (code !== 'SESSION_LIVE' && code !== 'SESSION_ACTIVE') {
+                    const blocked = MOVE_BLOCKED_KEYS[code]
+                    if (blocked === undefined) return []
+                    return [
+                      {
+                        id: 'move-refused',
+                        label: t(blocked.label),
+                        icon: { key: MENU_ID },
+                        separatorBefore: true,
+                        run: () => ctx.contextMenus.notify(t(blocked.toast), false),
+                      },
+                    ]
+                  }
                 }
                 return [
                   {
