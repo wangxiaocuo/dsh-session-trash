@@ -68,7 +68,16 @@ Rename, fork, archive, and copy Session ID stay in the shipped DSH sidebar menu.
 
 The plugin is published on npm ([`@wangxiaocuo/dsh-session-trash`](https://www.npmjs.com/package/@wangxiaocuo/dsh-session-trash)); the plugin dialog also accepts a GitHub address or a local directory.
 
-It needs DSH `^0.2.2-rc.1` and Node.js 20 or newer, on Desktop or Web. Installation and removal use the current profile's pnpm. Desktop bundles pnpm; a `dsh web` started from source needs pnpm on `PATH`, and installing from GitHub also needs git and working access to GitHub.
+It needs DSH `>=0.2.2-rc.1 <0.2.3-0` and Node.js 20 or newer, on Desktop or Web. Installation and removal use the current profile's pnpm. Desktop bundles pnpm; a `dsh web` started from source needs pnpm on `PATH`, and installing from GitHub also needs git and working access to GitHub.
+
+`engines.dsh` enforces the supported DSH range: DSH compares it when installing and enabling the plugin and refuses a mismatch.
+
+| DSH version | Support |
+|---|---|
+| `0.2.2-rc.1` – `0.2.2-rc.5` (the 0.2.2 line) | Supported; full end-to-end regression passes on `0.2.2-rc.1`, `0.2.2-rc.3`, and `0.2.2-rc.5` |
+| Older than `0.2.2-rc.1` (`0.2.2-alpha.*`, `0.2.1` and earlier) | Not supported; it lacks the 0.2.2 APIs the plugin needs, such as the session title snapshot |
+| `0.2.3-alpha.*` and later | Not adapted yet; `engines.dsh` refuses installation until a release supports it |
+
 
 ### Install from DSH (recommended)
 
@@ -108,7 +117,7 @@ cd "${DSH_HOME:-$HOME/.dsh}/profiles/desktop"
 pnpm add link:/absolute/path/to/dsh-session-trash
 ```
 
-Then add `@wangxiaocuo/dsh-session-trash` to `dsh.profile.bundles` in that profile's `package.json`, restart DSH to load the Host, and refresh the page to load the Client. Runtime dependencies are `@deepseek-ai/dsh-home-paths@0.2.2-rc.1` and `@deepseek-ai/schemastery@3.19.0`.
+Then add `@wangxiaocuo/dsh-session-trash` to `dsh.profile.bundles` in that profile's `package.json`, restart DSH to load the Host, and refresh the page to load the Client. Runtime dependencies are `@deepseek-ai/dsh-home-paths@0.2.2-rc.5` and `@deepseek-ai/schemastery@3.19.0`.
 
 ### Upgrade and uninstall
 
@@ -314,7 +323,7 @@ The checks below run in CI; the last row is run by hand.
 | Package contents (`npm pack`) | CI covers Ubuntu |
 | Coverage thresholds (`lib/**`, lines 85 / branches 70 / functions 84) | CI covers Ubuntu Node 22 |
 | Real `dsh web` end to end (npm-installed DSH) | CI covers Ubuntu, Windows (Node 22) |
-| Real `dsh web` end to end (desktop app) | macOS + DSH 0.2.2-rc.1 (run manually) |
+| Real `dsh web` end to end (desktop app) | macOS + DSH 0.2.2-rc.3 (run manually) |
 
 `npm run test:e2e` boots a real `dsh web` Host in a temporary `DSH_HOME` and runs the full flow. By default it discovers the desktop app in the platform's usual install locations (or uses `DSH_ELECTRON`); set `DSH_E2E_DSH_BIN` to the `lib/bin.js` of an npm-installed `@deepseek-ai/dsh` to boot the Host with plain Node instead, which is how CI and Linux/Windows run it, with no desktop app required. When no Host is found it prints a skip message and exits 0. The cleanup-failure scenario that relies on POSIX permission bits is skipped on Windows. Set `DSH_E2E_KEEP=1` to keep the temporary home and logs.
 

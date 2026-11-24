@@ -327,6 +327,8 @@ test('the reclaim dialog previews, requires the phrase, and deletes', async () =
     const dialog = document.querySelector('[role="dialog"]')
     assert.ok(dialog !== null)
     assert.ok(dialog.textContent.includes('将删除 1 个附件对象，释放 1 KB。'))
+    // A full-viewport overlay must declare its own macOS window-drag region.
+    assert.equal(dialog.closest('.dsh-trash__overlay')?.getAttribute('data-window-drag-exclude'), 'true')
     const input = dialog.querySelector('.dsh-trash__reclaimInput')
     assert.ok(input !== null)
     const confirm = buttonByText(dialog, '永久删除')
@@ -375,6 +377,8 @@ test('the row menu handles arrow keys, Tab, outside clicks, and Escape', async (
     const menu = container.querySelector('[role="menu"]')
     assert.ok(menu !== null)
     assert.equal(trigger.getAttribute('aria-expanded'), 'true')
+    // The fixed-positioned popup declares its own macOS window-drag region.
+    assert.equal(menu.getAttribute('data-window-drag-exclude'), 'true')
     const menuItems = [...menu.querySelectorAll('[role="menuitem"]')]
     assert.equal(menuItems.length, 3)
     assert.equal(document.activeElement, menuItems[0])
@@ -454,6 +458,7 @@ test('the confirm dialog traps focus, closes on Escape, and restores the opener'
     const dialog = container.querySelector('[role="dialog"]')
     assert.ok(dialog !== null)
     assert.equal(dialog.getAttribute('aria-modal'), 'true')
+    assert.equal(dialog.closest('.dsh-trash__overlay')?.getAttribute('data-window-drag-exclude'), 'true')
     const cancel = buttonByText(dialog, '取消')
     const confirm = [...dialog.querySelectorAll('button')].at(-1)
     assert.equal(document.activeElement, cancel)
