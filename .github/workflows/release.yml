@@ -62,7 +62,7 @@ jobs:
           mkdir -p "$CLI_DIR"
           cd "$CLI_DIR"
           printf '{"name":"dsh-e2e-runtime","private":true}\n' > package.json
-          pnpm add @deepseek-ai/dsh@0.2.2-rc.1
+          pnpm add @deepseek-ai/dsh@0.2.2-rc.5
       - name: e2e against the npm-installed dsh web host
         shell: bash
         env:

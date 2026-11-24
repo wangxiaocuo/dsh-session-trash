@@ -68,7 +68,16 @@
 
 插件发布在 npm（[`@wangxiaocuo/dsh-session-trash`](https://www.npmjs.com/package/@wangxiaocuo/dsh-session-trash)），也可以在「添加插件」里填 GitHub 仓库地址或本地目录。
 
-运行时要求 DSH `^0.2.2-rc.1` 和 Node.js 20 及以上，Desktop 和 Web 都可以用。安装和卸载由当前 profile 的 pnpm 完成。Desktop 自带 pnpm，从源码运行 `dsh web` 时要求 `PATH` 里有 pnpm，从 GitHub 安装还需要 git 和可用的 GitHub 网络。
+运行时要求 DSH `>=0.2.2-rc.1 <0.2.3-0` 和 Node.js 20 及以上，Desktop 和 Web 都可以用。安装和卸载由当前 profile 的 pnpm 完成。Desktop 自带 pnpm，从源码运行 `dsh web` 时要求 `PATH` 里有 pnpm，从 GitHub 安装还需要 git 和可用的 GitHub 网络。
+
+支持的 DSH 版本由 `engines.dsh` 检查（DSH 安装和启用插件时都会比对，不匹配会拒绝安装或启用）：
+
+| DSH 版本 | 支持情况 |
+|---|---|
+| `0.2.2-rc.1` – `0.2.2-rc.5`（0.2.2 系列） | 支持；已在 `0.2.2-rc.1`、`0.2.2-rc.3`、`0.2.2-rc.5` 上跑通完整端到端回归 |
+| 早于 `0.2.2-rc.1`（`0.2.2-alpha.*`、`0.2.1` 及更早） | 不支持；缺少插件依赖的会话标题快照等 0.2.2 API |
+| `0.2.3-alpha.*` 及之后 | 尚未适配；`engines.dsh` 会拒绝安装，等插件发布适配版本后再放行 |
+
 
 ### 在 DSH 里安装（推荐）
 
@@ -108,7 +117,7 @@ cd "${DSH_HOME:-$HOME/.dsh}/profiles/desktop"
 pnpm add link:/absolute/path/to/dsh-session-trash
 ```
 
-把 `@wangxiaocuo/dsh-session-trash` 加入该 profile `package.json` 的 `dsh.profile.bundles`，重启 DSH 加载 Host，刷新页面加载 Client。运行时依赖 `@deepseek-ai/dsh-home-paths@0.2.2-rc.1` 和 `@deepseek-ai/schemastery@3.19.0`。
+把 `@wangxiaocuo/dsh-session-trash` 加入该 profile `package.json` 的 `dsh.profile.bundles`，重启 DSH 加载 Host，刷新页面加载 Client。运行时依赖 `@deepseek-ai/dsh-home-paths@0.2.2-rc.5` 和 `@deepseek-ai/schemastery@3.19.0`。
 
 ### 升级和卸载
 
@@ -312,7 +321,7 @@ Host 冒烟测试通过 `@deepseek-ai/cordis` 这个 devDependency 装配真实�
 | 打包内容（`npm pack`） | CI 覆盖 Ubuntu |
 | 覆盖率门槛（`lib/**`，行 85 / 分支 70 / 函数 84） | CI 覆盖 Ubuntu Node 22 |
 | 真实 `dsh web` 端到端（npm 安装的 DSH） | CI 覆盖 Ubuntu、Windows（Node 22） |
-| 真实 `dsh web` 端到端（桌面版） | macOS + DSH 0.2.2-rc.1（手动执行） |
+| 真实 `dsh web` 端到端（桌面版） | macOS + DSH 0.2.2-rc.3（手动执行） |
 
 `npm run test:e2e` 会启动真实 `dsh web` Host，在临时 `DSH_HOME` 中跑完整流程。默认按平台在常见安装位置查找桌面版（也可以用 `DSH_ELECTRON` 指定）；设置 `DSH_E2E_DSH_BIN` 指向 npm 安装的 `@deepseek-ai/dsh` 的 `lib/bin.js` 时，改用普通 Node 启动 Host，CI 和 Linux/Windows 都走这条路径，不依赖桌面版。找不到 Host 时打印跳过信息并以 0 退出。依赖 POSIX 权限位的「清理失败」场景在 Windows 上会跳过。设置 `DSH_E2E_KEEP=1` 可以保留临时目录和日志。
 

@@ -1264,6 +1264,9 @@ window.__ModuleLoader__.load({
               {
                 className: 'dsh-trash__menu',
                 role: 'menu',
+                // Custom floating surfaces declare their own drag region: from
+                // DSH 0.2.2-rc.1 only controls inside drag rows are auto-excluded.
+                'data-window-drag-exclude': 'true',
                 'aria-label': label,
                 ref: menuRef,
                 style: position ?? undefined,
@@ -1397,6 +1400,9 @@ window.__ModuleLoader__.load({
         'div',
         {
           className: 'dsh-trash__overlay',
+          // This overlay covers the whole viewport, including the draggable
+          // macOS title bar, so its controls must declare their own region.
+          'data-window-drag-exclude': 'true',
           onMouseDown: (event) => {
             if (event.target === event.currentTarget) onCancel()
           },
@@ -1691,6 +1697,8 @@ window.__ModuleLoader__.load({
         'div',
         {
           className: 'dsh-trash__overlay',
+          // Same full-viewport overlay contract as the confirm dialog above.
+          'data-window-drag-exclude': 'true',
           onMouseDown: (event) => {
             if (event.target === event.currentTarget && state.phase !== 'deleting') onClose()
           },
